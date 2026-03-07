@@ -1,6 +1,7 @@
-[package]
-name = "aranshi"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
+[workspace]
+members = [
+    "apps/desktop",
+    "apps/server",
+    "crates/hurl_builder",
+]
+resolver = "2"
