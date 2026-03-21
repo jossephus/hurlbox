@@ -1,9 +1,11 @@
 mod api;
+mod envfile;
 mod execution;
 mod filescanner;
 mod models;
 
 use rust_embed::RustEmbed;
+use std::collections::HashMap;
 use warp::Filter;
 use warp::Reply;
 use std::sync::Arc;
@@ -23,8 +25,57 @@ fn get_embedded_file(path: &str) -> Option<(Vec<u8>, String)> {
     })
 }
 
+fn parse_cli_args() -> Result<Option<String>, String> {
+    let mut args = std::env::args().skip(1);
+    let mut env_file: Option<String> = None;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--" => {
+                continue;
+            }
+            "--env-file" | "-e" => {
+                let Some(path) = args.next() else {
+                    return Err("Missing path for --env-file".to_string());
+                };
+                env_file = Some(path);
+            }
+            _ => {
+                return Err(format!("Unknown argument: {}", arg));
+            }
+        }
+    }
+
+    Ok(env_file)
+}
+
 #[tokio::main]
 async fn main() {
+    let env_file = match parse_cli_args() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("{}", error);
+            eprintln!("Usage: hurlbox-server [--env-file <path>] [-e <path>]");
+            std::process::exit(2);
+        }
+    };
+
+    let default_env: HashMap<String, String> = if let Some(path) = env_file.as_ref() {
+        match envfile::parse_env_file(path) {
+            Ok(values) => {
+                println!("Loaded {} env variable(s) from {}", values.len(), path);
+                values
+            }
+            Err(error) => {
+                eprintln!("{}", error);
+                std::process::exit(2);
+            }
+        }
+    } else {
+        HashMap::new()
+    };
+    api::set_default_env(default_env, env_file.clone());
+
     // Shared state for managing running executions
     let _running_executions: Arc<Mutex<std::collections::HashMap<String, execution::ExecutionHandle>>> = 
         Arc::new(Mutex::new(std::collections::HashMap::new()));
@@ -44,6 +95,7 @@ async fn main() {
                 .or(api::files_route())
                 .or(api::read_file_route())
                 .or(api::create_file_route())
+                .or(api::env_default_route())
         );
 
     // Serve embedded static files from web/dist/assets

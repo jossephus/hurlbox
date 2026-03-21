@@ -1,5 +1,5 @@
 use crate::models::*;
-use hurl::runner::{self, AssertResult, RunnerOptionsBuilder, VariableSet};
+use hurl::runner::{self, AssertResult, RunnerOptionsBuilder, Value, VariableSet};
 use hurl::util::logger::LoggerOptionsBuilder;
 use std::collections::HashMap;
 
@@ -363,8 +363,14 @@ fn build_runner_options(_env: &Option<HashMap<String, String>>) -> runner::Runne
     RunnerOptionsBuilder::new().build()
 }
 
-fn build_variables(_env: &Option<HashMap<String, String>>) -> VariableSet {
-    VariableSet::new()
+fn build_variables(env: &Option<HashMap<String, String>>) -> VariableSet {
+    let mut variables = VariableSet::new();
+    if let Some(values) = env {
+        for (key, value) in values {
+            variables.insert(key.clone(), Value::String(value.clone()));
+        }
+    }
+    variables
 }
 
 fn convert_hurl_result_to_execution_result(

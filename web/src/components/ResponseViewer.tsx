@@ -3,9 +3,10 @@ import { codeToHtml } from 'shiki'
 
 interface ResponseViewerProps {
   content: string
+  theme: 'dark' | 'light'
 }
 
-export function ResponseViewer({ content }: ResponseViewerProps) {
+export function ResponseViewer({ content, theme }: ResponseViewerProps) {
   const [html, setHtml] = useState<string>('')
 
   const parsed = useMemo(() => {
@@ -35,16 +36,16 @@ export function ResponseViewer({ content }: ResponseViewerProps) {
     if (parsed.isJson) {
       codeToHtml(parsed.body, {
         lang: 'json',
-        theme: 'github-dark-dimmed',
+        theme: theme === 'dark' ? 'github-dark-dimmed' : 'github-light',
       }).then(jsonHtml => {
         setHtml(jsonHtml)
       }).catch(() => {
-        setHtml(`<pre>${parsed.body}</pre>`)
+        setHtml(`<pre style="margin:0;color:var(--text-primary)">${parsed.body}</pre>`)
       })
     } else {
-      setHtml(`<pre style="margin:0">${parsed.body}</pre>`)
+      setHtml(`<pre style="margin:0;color:var(--text-primary)">${parsed.body}</pre>`)
     }
-  }, [parsed])
+  }, [parsed, theme])
 
   if (!content) {
     return (
@@ -57,7 +58,7 @@ export function ResponseViewer({ content }: ResponseViewerProps) {
   if (!parsed) return null
 
   return (
-    <div style={{ fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
+    <div className="response-viewer" style={{ fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
       {/* Status header */}
       <div 
         className="mb-3 pb-2"
@@ -70,7 +71,7 @@ export function ResponseViewer({ content }: ResponseViewerProps) {
       </div>
       
       {/* Body with syntax highlighting */}
-      <div dangerouslySetInnerHTML={{ __html: html }} />
+      <div className="response-body" dangerouslySetInnerHTML={{ __html: html }} />
     </div>
   )
 }

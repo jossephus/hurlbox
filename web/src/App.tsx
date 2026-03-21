@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, type ChangeEvent } from 'react'
 import Editor, { type OnMount } from '@monaco-editor/react'
 import type * as monaco from 'monaco-editor'
 import { TestTube2, FileText, FileCode, Sun, Moon, Loader2, FolderOpen, Folder } from 'lucide-react'
@@ -73,6 +73,25 @@ function formatResponseData(data: unknown, mode: RunMode): string {
   return formatEntryResult(data as ExecutionResult, 0)
 }
 
+function parseEnvInput(input: string): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const rawLine of input.split('\n')) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith('#')) continue
+    const withoutExport = line.startsWith('export ') ? line.slice(7).trim() : line
+    const separatorIndex = withoutExport.indexOf('=')
+    if (separatorIndex === -1) continue
+    const key = withoutExport.slice(0, separatorIndex).trim()
+    if (!key) continue
+    let value = withoutExport.slice(separatorIndex + 1).trim()
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1)
+    }
+    env[key] = value
+  }
+  return env
+}
+
 function App() {
   const [content, setContent] = useState(SAMPLE_HURL)
   const [response, setResponse] = useState<string>('')
@@ -95,12 +114,32 @@ function App() {
   const [currentFileName, setCurrentFileName] = useState('editor.hurl')
   const [showExplorer, setShowExplorer] = useState(true)
   const [fileTreeRefreshKey, setFileTreeRefreshKey] = useState(0)
+  const [envInput, setEnvInput] = useState('')
+  const [envFileName, setEnvFileName] = useState<string | null>(null)
+  const [serverEnvFileName, setServerEnvFileName] = useState<string | null>(null)
   const monacoRef = useRef<typeof monaco | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const entriesRef = useRef<EntryInfo[]>([])
   const runRequestRef = useRef<((mode: RunMode, entryIndex?: number) => Promise<void>) | null>(null)
+  const envFileInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => { entriesRef.current = entries }, [entries])
+
+  useEffect(() => {
+    const loadServerEnv = async () => {
+      try {
+        const res = await fetch('/api/env-default')
+        if (!res.ok) return
+        const data = await res.json()
+        if (data.loaded && data.source) {
+          setServerEnvFileName(data.source)
+        }
+      } catch {
+        // ignore env metadata failures
+      }
+    }
+    loadServerEnv()
+  }, [])
 
   const toggleTheme = useCallback(() => {
     setTheme(prev => {
@@ -149,16 +188,31 @@ function App() {
     }
   }, [])
 
+  const handleEnvFileSelected = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    try {
+      const text = await file.text()
+      setEnvInput(text)
+      setEnvFileName(file.name)
+    } catch {
+      window.alert('Failed to read env file')
+    } finally {
+      event.target.value = ''
+    }
+  }, [])
+
   const runRequest = useCallback(async (mode: RunMode, entryIndex?: number) => {
     setIsLoading(true)
     setActiveTab('response')
     try {
+      const env = parseEnvInput(envInput)
       let endpoint = '/api/run-file'
-      let body: Record<string, unknown> = { content, env: {} }
+      let body: Record<string, unknown> = { content, env }
 
       if (mode === 'entry' && entryIndex !== undefined) {
         endpoint = '/api/run-entry'
-        body = { content, entry_index: entryIndex, env: {} }
+        body = { content, entry_index: entryIndex, env }
         // Store request info for display
         const entry = entries.find(e => e.index === entryIndex)
         if (entry) {
@@ -206,7 +260,7 @@ function App() {
     } finally {
       setIsLoading(false)
     }
-    }, [content, entries])
+    }, [content, entries, envInput])
 
   useEffect(() => { runRequestRef.current = runRequest }, [runRequest])
 
@@ -290,13 +344,13 @@ function App() {
       <div className="noise-overlay" />
 
       <header 
-        className="shrink-0 px-4 h-12 flex items-center justify-between"
+        className="app-header shrink-0 px-4 flex items-center justify-between"
         style={{ 
           background: 'var(--bg-secondary)',
           borderBottom: '1px solid var(--border-default)',
         }}
       >
-        <div className="flex items-center gap-3">
+        <div className="app-header-left flex items-center gap-3">
           <span 
             className="text-sm font-semibold tracking-wide"
             style={{ 
@@ -328,12 +382,45 @@ function App() {
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="app-header-actions flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowExplorer((prev) => !prev)}
+            className="p-1.5 rounded transition-colors"
+            style={{ color: showExplorer ? 'var(--text-primary)' : 'var(--text-muted)' }}
+            aria-label={showExplorer ? 'Hide explorer' : 'Show explorer'}
+            title={showExplorer ? 'Hide explorer' : 'Show explorer'}
+          >
+            <FolderOpen className="w-4 h-4" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => envFileInputRef.current?.click()}
+            className="px-3 py-1.5 text-xs rounded transition-colors"
+            style={{ 
+              color: (envFileName || serverEnvFileName) ? 'var(--text-primary)' : 'var(--text-secondary)',
+              background: (envFileName || serverEnvFileName) ? 'var(--bg-elevated)' : 'transparent',
+              border: '1px solid var(--border-default)',
+            }}
+            title={envFileName ? `UI env file: ${envFileName}` : (serverEnvFileName ? `Server env file: ${serverEnvFileName}` : 'Load env file')}
+          >
+            {envFileName ? `Env: ${envFileName}` : (serverEnvFileName ? `Env (server): ${serverEnvFileName}` : 'Load Env')}
+          </button>
+          <input
+            ref={envFileInputRef}
+            type="file"
+            className="hidden"
+            onChange={handleEnvFileSelected}
+          />
+
           <button
             type="button"
             onClick={toggleTheme}
             className="p-1.5 rounded transition-colors"
             style={{ color: 'var(--text-muted)' }}
+            aria-label="Toggle theme"
+            title="Toggle theme"
           >
             {theme === 'dark' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
           </button>
@@ -380,10 +467,10 @@ function App() {
         </div>
       </header>
 
-      <main className="flex-1 flex min-h-0">
+      <main className="app-main flex-1 flex min-h-0">
         {/* File Explorer Sidebar */}
         <div 
-          className="w-56 flex flex-col shrink-0"
+          className={`app-sidebar w-56 flex flex-col shrink-0 ${showExplorer ? 'open' : 'closed'}`}
           style={{ 
             borderRight: '1px solid var(--border-default)',
             background: 'var(--bg-secondary)',
@@ -412,6 +499,8 @@ function App() {
               type="button"
               onClick={() => setShowExplorer(!showExplorer)}
               className="p-1 rounded transition-colors hover:bg-[var(--bg-elevated)]"
+              aria-label={showExplorer ? 'Hide explorer' : 'Show explorer'}
+              title={showExplorer ? 'Hide explorer' : 'Show explorer'}
             >
               <Folder className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
             </button>
@@ -451,7 +540,7 @@ function App() {
             <Editor
               height="100%"
               defaultLanguage="hurl"
-              theme="vs-dark"
+              theme={theme === 'dark' ? 'vs-dark' : 'vs'}
               value={content}
               onChange={(v) => setContent(v || '')}
               onMount={handleEditorMount}
@@ -476,7 +565,7 @@ function App() {
         </div>
 
         <div 
-          className="w-[450px] flex flex-col min-w-0"
+          className="app-response-panel w-[450px] flex flex-col min-w-0"
           style={{ 
             borderLeft: '1px solid var(--border-default)',
             background: 'var(--bg-secondary)',
@@ -514,7 +603,7 @@ function App() {
             )}
           </div>
           <div className="flex-1 overflow-y-auto p-3">
-            {activeTab === 'response' && <ResponseViewer content={response} />}
+            {activeTab === 'response' && <ResponseViewer content={response} theme={theme} />}
             
             {activeTab === 'headers' && (
               <div className="text-xs" style={{ fontFamily: 'var(--font-mono)' }}>
