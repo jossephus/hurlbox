@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import Editor, { type OnMount } from '@monaco-editor/react'
 import type * as monaco from 'monaco-editor'
-import { TestTube2, FileText, Terminal, FileCode, Sun, Moon, Loader2 } from 'lucide-react'
+import { TestTube2, FileText, FileCode, Sun, Moon, Loader2 } from 'lucide-react'
 import { ResponseViewer } from './components/ResponseViewer'
 import { registerHurlLanguage } from './lib/hurl-lang'
 import './App.css'
@@ -11,7 +11,12 @@ interface ExecutionResult {
   status: number
   headers: Record<string, string>
   body: string
-  timing?: { duration_ms: number }
+  timing?: {
+    duration_ms: number
+    connect_time_ms?: number
+    tls_time_ms?: number
+    transfer_time_ms?: number
+  }
   assertions: Array<{ query: string; passed: boolean }>
   error?: string
 }
@@ -70,6 +75,16 @@ function formatResponseData(data: unknown, mode: RunMode): string {
 function App() {
   const [content, setContent] = useState(SAMPLE_HURL)
   const [response, setResponse] = useState<string>('')
+  const [responseHeaders, setResponseHeaders] = useState<Record<string, string>>({})
+  const [responseAssertions, setResponseAssertions] = useState<Array<{ query: string; passed: boolean }>>([])
+  const [responseTiming, setResponseTiming] = useState<{ 
+    duration_ms: number
+    connect_time_ms?: number
+    tls_time_ms?: number
+    transfer_time_ms?: number
+  } | null>(null)
+  const [activeTab, setActiveTab] = useState<'response' | 'headers' | 'asserts' | 'request' | 'timing'>('response')
+  const [lastRequest, setLastRequest] = useState<{ method: string; url: string } | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [entries, setEntries] = useState<EntryInfo[]>([])
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
@@ -91,6 +106,7 @@ function App() {
 
   const runRequest = useCallback(async (mode: RunMode, entryIndex?: number) => {
     setIsLoading(true)
+    setActiveTab('response')
     try {
       let endpoint = '/api/run-file'
       let body: Record<string, unknown> = { content, env: {} }
@@ -98,6 +114,11 @@ function App() {
       if (mode === 'entry' && entryIndex !== undefined) {
         endpoint = '/api/run-entry'
         body = { content, entry_index: entryIndex, env: {} }
+        // Store request info for display
+        const entry = entries.find(e => e.index === entryIndex)
+        if (entry) {
+          setLastRequest({ method: entry.method, url: entry.url })
+        }
       } else if (mode === 'test') {
         endpoint = '/api/test-file'
       }
@@ -110,12 +131,37 @@ function App() {
 
       const data = await res.json()
       setResponse(formatResponseData(data, mode))
+      
+      // Extract detailed info from first result
+      let firstResult: ExecutionResult | null = null
+      if (Array.isArray(data) && data.length > 0) {
+        firstResult = data[0]
+        setResponseHeaders(data[0].headers || {})
+      } else if (data && typeof data === 'object' && 'headers' in data) {
+        firstResult = data as ExecutionResult
+        setResponseHeaders(data.headers || {})
+      } else if (data && typeof data === 'object' && 'results' in data) {
+        const results = (data as TestFileResponse).results
+        if (results && results.length > 0) {
+          firstResult = results[0]
+          setResponseHeaders(results[0].headers || {})
+        }
+      }
+      
+      // Extract assertions and timing
+      if (firstResult) {
+        setResponseAssertions(firstResult.assertions || [])
+        setResponseTiming(firstResult.timing || null)
+      }
     } catch (error) {
       setResponse(`✗ Error: ${error}`)
+      setResponseHeaders({})
+      setResponseAssertions([])
+      setResponseTiming(null)
     } finally {
       setIsLoading(false)
     }
-  }, [content])
+    }, [content, entries])
 
   useEffect(() => { runRequestRef.current = runRequest }, [runRequest])
 
@@ -324,7 +370,7 @@ function App() {
         </div>
 
         <div 
-          className="w-[380px] flex flex-col min-w-0"
+          className="w-[450px] flex flex-col min-w-0"
           style={{ 
             borderLeft: '1px solid var(--border-default)',
             background: 'var(--bg-secondary)',
@@ -337,17 +383,23 @@ function App() {
               borderBottom: '1px solid var(--border-dim)',
             }}
           >
-            <div className="flex items-center gap-2">
-              <Terminal className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
-              <span 
-                className="text-xs"
-                style={{ 
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--text-secondary)',
-                }}
-              >
-                response
-              </span>
+            <div className="flex items-center gap-1">
+              {/* Tabs */}
+              {(['response', 'headers', 'asserts', 'request', 'timing'] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setActiveTab(tab)}
+                  className="px-2 py-1 rounded text-xs capitalize transition-colors"
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    color: activeTab === tab ? 'var(--text-primary)' : 'var(--text-muted)',
+                    background: activeTab === tab ? 'var(--bg-elevated)' : 'transparent',
+                  }}
+                >
+                  {tab}
+                </button>
+              ))}
             </div>
             {isLoading && (
               <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
@@ -356,7 +408,95 @@ function App() {
             )}
           </div>
           <div className="flex-1 overflow-y-auto p-3">
-            <ResponseViewer content={response} />
+            {activeTab === 'response' && <ResponseViewer content={response} />}
+            
+            {activeTab === 'headers' && (
+              <div className="text-xs" style={{ fontFamily: 'var(--font-mono)' }}>
+                {Object.keys(responseHeaders).length > 0 ? (
+                  <div className="space-y-2">
+                    {Object.entries(responseHeaders).map(([key, value]) => (
+                      <div key={key} className="flex flex-col gap-1">
+                        <span style={{ color: 'var(--accent-cyan)' }}>{key}</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>{value}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <span style={{ color: 'var(--text-muted)' }}>No headers available</span>
+                )}
+              </div>
+            )}
+            
+            {activeTab === 'asserts' && (
+              <div className="text-xs" style={{ fontFamily: 'var(--font-mono)' }}>
+                {responseAssertions.length > 0 ? (
+                  <div className="space-y-2">
+                    {responseAssertions.map((assertion, idx) => (
+                      <div key={idx} className="flex items-center gap-2 p-2 rounded" style={{ background: 'var(--bg-elevated)' }}>
+                        <span className={assertion.passed ? 'text-green-400' : 'text-red-400'}>
+                          {assertion.passed ? '✓' : '✗'}
+                        </span>
+                        <span style={{ color: 'var(--text-primary)' }}>{assertion.query}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <span style={{ color: 'var(--text-muted)' }}>No assertions</span>
+                )}
+              </div>
+            )}
+            
+            {activeTab === 'request' && (
+              <div className="text-xs" style={{ fontFamily: 'var(--font-mono)' }}>
+                {lastRequest ? (
+                  <div className="space-y-2">
+                    <div className="p-2 rounded" style={{ background: 'var(--bg-elevated)' }}>
+                      <div className="flex items-center gap-2">
+                        <span style={{ color: 'var(--accent-cyan)' }}>{lastRequest.method}</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>{lastRequest.url}</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <span style={{ color: 'var(--text-muted)' }}>No request info</span>
+                )}
+              </div>
+            )}
+            
+            {activeTab === 'timing' && (
+              <div className="text-xs" style={{ fontFamily: 'var(--font-mono)' }}>
+                {responseTiming ? (
+                  <div className="space-y-2">
+                    <div className="p-2 rounded" style={{ background: 'var(--bg-elevated)' }}>
+                      <div className="flex justify-between">
+                        <span style={{ color: 'var(--text-muted)' }}>Total</span>
+                        <span style={{ color: 'var(--accent-cyan)' }}>{responseTiming.duration_ms}ms</span>
+                      </div>
+                      {responseTiming.connect_time_ms != null && (
+                        <div className="flex justify-between mt-1">
+                          <span style={{ color: 'var(--text-muted)' }}>Connect</span>
+                          <span style={{ color: 'var(--text-secondary)' }}>{responseTiming.connect_time_ms}ms</span>
+                        </div>
+                      )}
+                      {responseTiming.tls_time_ms != null && (
+                        <div className="flex justify-between mt-1">
+                          <span style={{ color: 'var(--text-muted)' }}>TLS</span>
+                          <span style={{ color: 'var(--text-secondary)' }}>{responseTiming.tls_time_ms}ms</span>
+                        </div>
+                      )}
+                      {responseTiming.transfer_time_ms != null && (
+                        <div className="flex justify-between mt-1">
+                          <span style={{ color: 'var(--text-muted)' }}>Transfer</span>
+                          <span style={{ color: 'var(--text-secondary)' }}>{responseTiming.transfer_time_ms}ms</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <span style={{ color: 'var(--text-muted)' }}>No timing info</span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </main>
