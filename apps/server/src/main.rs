@@ -1,5 +1,6 @@
 mod api;
 mod execution;
+mod filescanner;
 mod models;
 
 use rust_embed::RustEmbed;
@@ -40,6 +41,9 @@ async fn main() {
                 .or(api::test_file_route())
                 .or(api::rerun_last_route())
                 .or(api::cancel_route())
+                .or(api::files_route())
+                .or(api::read_file_route())
+                .or(api::create_file_route())
         );
 
     // Serve embedded static files from web/dist/assets

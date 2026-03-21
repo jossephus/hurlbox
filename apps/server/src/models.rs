@@ -118,3 +118,32 @@ pub struct CancelResponse {
     pub success: bool,
     pub message: String,
 }
+
+// File query models
+#[derive(Deserialize)]
+pub struct FileQuery {
+    pub path: String,
+}
+
+#[derive(Deserialize)]
+pub struct FileReadQuery {
+    pub path: String,
+}
+
+#[derive(Deserialize)]
+pub struct CreateFileRequest {
+    pub path: String,
+    pub content: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct FileContentResponse {
+    pub content: String,
+    pub path: String,
+}
+
+#[derive(Serialize)]
+pub struct CreateFileResponse {
+    pub success: bool,
+    pub path: String,
+}

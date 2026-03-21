@@ -1,4 +1,5 @@
 use crate::execution;
+use crate::filescanner;
 use crate::models::*;
 use warp::http::StatusCode;
 use warp::{Filter, Rejection, Reply};
@@ -114,4 +115,48 @@ pub fn cancel_route() -> impl Filter<Extract = impl Reply, Error = Rejection> + 
                 Err(error) => err_json(StatusCode::BAD_REQUEST, error).into_response(),
             },
         )
+}
+
+pub fn files_route() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::get()
+        .and(warp::path("files"))
+        .and(warp::query::<FileQuery>())
+        .map(
+            |query: FileQuery| match filescanner::scan_directory(&query.path) {
+                Ok(tree) => ok_json(&tree).into_response(),
+                Err(error) => err_json(StatusCode::BAD_REQUEST, error).into_response(),
+            },
+        )
+}
+
+pub fn read_file_route() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::get()
+        .and(warp::path("file"))
+        .and(warp::query::<FileReadQuery>())
+        .map(
+            |query: FileReadQuery| match filescanner::read_file(&query.path) {
+                Ok(content) => ok_json(&FileContentResponse {
+                    content,
+                    path: query.path,
+                })
+                .into_response(),
+                Err(error) => err_json(StatusCode::BAD_REQUEST, error).into_response(),
+            },
+        )
+}
+
+pub fn create_file_route() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::post()
+        .and(warp::path("file"))
+        .and(warp::body::json())
+        .map(|request: CreateFileRequest| {
+            match filescanner::create_file(&request.path, request.content.as_deref()) {
+                Ok(path) => ok_json(&CreateFileResponse {
+                    success: true,
+                    path,
+                })
+                .into_response(),
+                Err(error) => err_json(StatusCode::BAD_REQUEST, error).into_response(),
+            }
+        })
 }

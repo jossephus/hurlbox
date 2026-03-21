@@ -1,8 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import Editor, { type OnMount } from '@monaco-editor/react'
 import type * as monaco from 'monaco-editor'
-import { TestTube2, FileText, FileCode, Sun, Moon, Loader2 } from 'lucide-react'
+import { TestTube2, FileText, FileCode, Sun, Moon, Loader2, FolderOpen, Folder } from 'lucide-react'
 import { ResponseViewer } from './components/ResponseViewer'
+import { FileExplorer } from './components/FileExplorer'
 import { registerHurlLanguage } from './lib/hurl-lang'
 import './App.css'
 
@@ -89,6 +90,11 @@ function App() {
   const [entries, setEntries] = useState<EntryInfo[]>([])
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
   const [currentEntry, setCurrentEntry] = useState(0)
+  const [rootPath, setRootPath] = useState('.')
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
+  const [currentFileName, setCurrentFileName] = useState('editor.hurl')
+  const [showExplorer, setShowExplorer] = useState(true)
+  const [fileTreeRefreshKey, setFileTreeRefreshKey] = useState(0)
   const monacoRef = useRef<typeof monaco | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const entriesRef = useRef<EntryInfo[]>([])
@@ -102,6 +108,45 @@ function App() {
       document.documentElement.classList.toggle('light', newTheme === 'light')
       return newTheme
     })
+  }, [])
+
+  const handleFileSelect = useCallback((path: string, fileContent: string) => {
+    setSelectedFilePath(path)
+    setCurrentFileName(path.split('/').pop() || path)
+    setContent(fileContent)
+  }, [])
+
+  const handleCreateFile = useCallback(async (directoryPath: string) => {
+    const fileName = window.prompt('New file name', 'new-request.hurl')?.trim()
+    if (!fileName) return
+
+    const nextFileName = fileName.endsWith('.hurl') ? fileName : `${fileName}.hurl`
+    const baseDir = directoryPath.replace(/\/$/, '')
+    const targetPath = `${baseDir}/${nextFileName}`
+
+    const initialContent = 'GET https://jsonplaceholder.typicode.com/todos/1\nHTTP 200\n'
+
+    try {
+      const res = await fetch('/api/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: targetPath, content: initialContent }),
+      })
+
+      if (!res.ok) {
+        const err = await res.json()
+        window.alert(err.error || 'Failed to create file')
+        return
+      }
+
+      const data = await res.json()
+      setSelectedFilePath(data.path)
+      setCurrentFileName(nextFileName)
+      setContent(initialContent)
+      setFileTreeRefreshKey((prev) => prev + 1)
+    } catch {
+      window.alert('Failed to create file')
+    }
   }, [])
 
   const runRequest = useCallback(async (mode: RunMode, entryIndex?: number) => {
@@ -261,6 +306,20 @@ function App() {
           >
             HURLBOX
           </span>
+          <div className="flex items-center gap-1 px-2 py-0.5 rounded" style={{ background: 'var(--bg-elevated)' }}>
+            <FolderOpen className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />
+            <input
+              type="text"
+              value={rootPath}
+              onChange={(e) => setRootPath(e.target.value)}
+              className="text-xs bg-transparent border-none outline-none w-32"
+              style={{ 
+                fontFamily: 'var(--font-mono)',
+                color: 'var(--text-secondary)',
+              }}
+              placeholder="."              
+            />
+          </div>
           <span 
             className="text-xs"
             style={{ color: 'var(--text-muted)' }}
@@ -322,6 +381,53 @@ function App() {
       </header>
 
       <main className="flex-1 flex min-h-0">
+        {/* File Explorer Sidebar */}
+        <div 
+          className="w-56 flex flex-col shrink-0"
+          style={{ 
+            borderRight: '1px solid var(--border-default)',
+            background: 'var(--bg-secondary)',
+          }}
+        >
+          <div 
+            className="h-8 px-3 flex items-center justify-between shrink-0"
+            style={{ 
+              background: 'var(--bg-primary)',
+              borderBottom: '1px solid var(--border-dim)',
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <FolderOpen className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
+              <span 
+                className="text-xs font-medium"
+                style={{ 
+                  fontFamily: 'var(--font-mono)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                EXPLORER
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowExplorer(!showExplorer)}
+              className="p-1 rounded transition-colors hover:bg-[var(--bg-elevated)]"
+            >
+              <Folder className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            <FileExplorer
+              rootPath={rootPath}
+              refreshKey={fileTreeRefreshKey}
+              onCreateFile={handleCreateFile}
+              onFileSelect={handleFileSelect}
+              selectedPath={selectedFilePath}
+            />
+          </div>
+        </div>
+
+        {/* Editor Area */}
         <div className="flex-1 flex flex-col min-w-0">
           <div 
             className="h-8 px-3 flex items-center shrink-0"
@@ -338,7 +444,7 @@ function App() {
                 color: 'var(--text-secondary)',
               }}
             >
-              editor.hurl
+              {currentFileName}
             </span>
           </div>
           <div className="flex-1 min-h-0">
