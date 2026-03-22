@@ -34,7 +34,7 @@ pub struct RunSelectionRequest {
     pub env: Option<std::collections::HashMap<String, String>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct SelectionRange {
     pub start_line: u32,
     pub end_line: u32,

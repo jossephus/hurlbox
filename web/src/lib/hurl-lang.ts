@@ -1,3 +1,4 @@
+// Hurl syntax rules adapted from https://github.com/alextreichler/hurl-syntax-highlighting
 import type * as monaco from 'monaco-editor'
 
 export function registerHurlLanguage(monacoInstance: typeof monaco) {
@@ -6,65 +7,33 @@ export function registerHurlLanguage(monacoInstance: typeof monaco) {
   monacoInstance.languages.setMonarchTokensProvider('hurl', {
     ignoreCase: true,
     defaultToken: '',
-    
+
     tokenizer: {
       root: [
         // Comments
         [/#.*$/, 'comment'],
-        
-        // Section headers
-        [/\[Asserts\]/, 'keyword.control'],
-        [/\[Captures\]/, 'keyword.control'],
-        [/\[QueryStringParams\]/, 'keyword.control'],
-        [/\[FormParams\]/, 'keyword.control'],
-        [/\[MultipartFormData\]/, 'keyword.control'],
-        [/\[Cookies\]/, 'keyword.control'],
-        [/\[Options\]/, 'keyword.control'],
-        
-        // HTTP version and status
-        [/HTTP\/[\d.]+/, 'keyword.control'],
-        [/\bHTTP\s+\d+/, 'keyword.control'],
-        
+
         // Methods
-        [/\b(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b/, 'keyword.other.http-method'],
-        
-        // URL
-        [/(https?:\/\/[^\s]+)/, 'string.url'],
-        
-        // Strings
+        [/\b(GET|HEAD|POST|PUT|DELETE|CONNECT|OPTIONS|TRACE|PATCH)\b/, 'keyword.control'],
+
+        // Operators
+        [/[\-\^=\*\|><]/, 'keyword.operator'],
+
+        // Query functions and sections
+        [/\b(status|url|header|cookie|body|xpath|jsonpath|regex|variable|duration|sha256|md5|bytes)\b/, 'support.function'],
+        [/\b(Asserts|FormParams|Options|Captures|QueryStringParams|MultipartFormData|Cookies)\b/, 'constant.character'],
+
+        // Strings (double-quoted only, to match reference grammar)
         [/"([^"\\]|\\.)*"/, 'string'],
-        [/'([^'\\]|\\.)*'/, 'string'],
-        
-        // Variables {{var}}
-        [/\{\{[^}]+\}\}/, 'variable'],
-        
-        // JSONPath
-        [/\$[.\[\]"']*/, 'variable.other.jsonpath'],
-        
-        // XPath
-        [/\bxpath\b/, 'keyword.control'],
-        
-        // Queries
-        [/\b(status|body|header|jsonpath|xpath|regex|url|duration|bytes|sha256|md5|variable)\b/, 'keyword.control'],
-        
-        // Predicates
-        [/\b(contains|exists|isInteger|isFloat|isBoolean|isCollection|isEmpty|notEquals|equals|startsWith|endsWith|matches|include|isString|lessThan|greaterThan|lessThanOrEqual|greaterThanOrEqual|between)\b/, 'keyword.operator'],
-        
-        // Boolean
-        [/\b(true|false)\b/, 'constant.language.boolean'],
-        
+
         // Numbers
-        [/\b\d+\b/, 'number'],
-        
-        // Filenames
-        [/\bfile\b/, 'keyword.control'],
-        
-        // Base64
-        [/\bbase64\b/, 'keyword.control'],
-        
-        // Helpers
-        [/\b(date|now|uuid)\b/, 'support.function'],
-        
+        [/\b(?:\d[_\d]*\.\d[_\d]*(?:[eE][-+]?\d[_\d]*)?|\d[_\d]*[eE][-+]?\d[_\d]*)\b/, 'number.float'],
+        [/\b(?:0[xX]_*[0-9a-fA-F][0-9a-fA-F_]*\.[0-9a-fA-F][0-9a-fA-F_]*(?:[pP][-+]?\d[_\d]*)?|0[xX]_*[0-9a-fA-F][0-9a-fA-F_]*[pP][-+]?\d[_\d]*)\b/, 'number.hex'],
+        [/\b0[xX]_*[0-9a-fA-F][0-9a-fA-F_]*\b/, 'number.hex'],
+        [/\b0[oO]_*[0-7][0-7_]*\b/, 'number.octal'],
+        [/\b0[bB]_*[01][01_]*\b/, 'number.binary'],
+        [/\b\d[_\d]*\b/, 'number'],
+
         // Whitespace
         [/\s+/, 'white'],
       ],

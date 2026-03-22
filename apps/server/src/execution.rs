@@ -1,10 +1,94 @@
 use crate::models::*;
 use hurl::runner::{self, AssertResult, RunnerOptionsBuilder, Value, VariableSet};
 use hurl::util::logger::LoggerOptionsBuilder;
+use hurl_core::error::{DisplaySourceError, OutputFormat};
 use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 pub struct ExecutionHandle {
     // Placeholder for managing running executions
+}
+
+#[derive(Clone)]
+enum LastExecutionCommand {
+    RunEntry {
+        content: String,
+        entry_index: usize,
+        env: Option<HashMap<String, String>>,
+    },
+    RunToEnd {
+        content: String,
+        entry_index: usize,
+        env: Option<HashMap<String, String>>,
+    },
+    RunFromBegin {
+        content: String,
+        entry_index: usize,
+        env: Option<HashMap<String, String>>,
+    },
+    RunSelection {
+        content: String,
+        selection: SelectionRange,
+        env: Option<HashMap<String, String>>,
+    },
+    RunFile {
+        content: String,
+        env: Option<HashMap<String, String>>,
+    },
+}
+
+static LAST_EXECUTION: OnceLock<Mutex<Option<LastExecutionCommand>>> = OnceLock::new();
+
+fn last_execution_store() -> &'static Mutex<Option<LastExecutionCommand>> {
+    LAST_EXECUTION.get_or_init(|| Mutex::new(None))
+}
+
+fn remember_last(command: LastExecutionCommand) {
+    let mut guard = last_execution_store()
+        .lock()
+        .expect("last execution mutex poisoned");
+    *guard = Some(command);
+}
+
+fn last_result_or_error(
+    mut results: Vec<ExecutionResult>,
+    command_name: &str,
+) -> Result<ExecutionResult, String> {
+    results
+        .pop()
+        .ok_or_else(|| format!("{} produced no execution results", command_name))
+}
+
+fn format_runner_errors(result: &hurl::runner::HurlResult, content: &str) -> Option<String> {
+    let errors = result
+        .errors()
+        .into_iter()
+        .map(|(e, _)| format_runner_error(e, content))
+        .collect::<Vec<_>>();
+
+    if errors.is_empty() {
+        None
+    } else {
+        Some(errors.join(", "))
+    }
+}
+
+fn format_entry_errors(entry: &hurl::runner::EntryResult, content: &str) -> Option<String> {
+    let errors = entry
+        .errors
+        .iter()
+        .map(|e| format_runner_error(e, content))
+        .collect::<Vec<_>>();
+
+    if errors.is_empty() {
+        None
+    } else {
+        Some(errors.join(", "))
+    }
+}
+
+fn format_runner_error(error: &hurl::runner::RunnerError, content: &str) -> String {
+    error.render("", content, None, OutputFormat::Plain)
 }
 
 pub fn parse_hurl_entries(content: &str) -> Result<Vec<EntryInfo>, String> {
@@ -109,7 +193,7 @@ fn line_matches_request(line: &str, method_upper: &str, url: Option<&str>) -> bo
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_hurl_entries, run_selection};
+    use super::{parse_hurl_entries, run_entry, run_selection};
     use crate::models::SelectionRange;
 
     #[test]
@@ -171,9 +255,31 @@ header \"Content-Type\" contains \"application/json\""#;
 
         assert!(err.contains("outside file"));
     }
+
+    #[test]
+    fn run_entry_surfaces_undefined_variable_error() {
+        let content = "GET {{base_url}}/api/files?path=examples\nHTTP 200";
+        let err = run_entry(content, 0, None).expect_err("expected undefined variable error");
+
+        assert!(err.contains("Undefined") || err.contains("base_url"));
+    }
 }
 
 pub fn run_entry(
+    content: &str,
+    entry_index: usize,
+    env: Option<HashMap<String, String>>,
+) -> Result<ExecutionResult, String> {
+    let result = run_entry_inner(content, entry_index, env.clone())?;
+    remember_last(LastExecutionCommand::RunEntry {
+        content: content.to_string(),
+        entry_index,
+        env,
+    });
+    Ok(result)
+}
+
+fn run_entry_inner(
     content: &str,
     entry_index: usize,
     env: Option<HashMap<String, String>>,
@@ -186,10 +292,21 @@ pub fn run_entry(
     // For now, run the entire file and return the requested entry
     // In a more sophisticated implementation, we would extract just the target entry
     let results = run_file(content, env)?;
-    results
-        .into_iter()
-        .find(|r| r.entry_index == entry_index)
-        .ok_or_else(|| "Entry execution failed".to_string())
+    let mut first_error: Option<String> = None;
+    for result in results {
+        if result.entry_index == entry_index {
+            return Ok(result);
+        }
+        if first_error.is_none() {
+            first_error = result.error;
+        }
+    }
+
+    if let Some(err) = first_error {
+        return Err(err);
+    }
+
+    Err("Entry execution failed".to_string())
 }
 
 pub fn run_to_end(
@@ -197,7 +314,21 @@ pub fn run_to_end(
     entry_index: usize,
     env: Option<HashMap<String, String>>,
 ) -> Result<Vec<ExecutionResult>, String> {
-    let results = run_file(content, env)?;
+    let results = run_to_end_inner(content, entry_index, env.clone())?;
+    remember_last(LastExecutionCommand::RunToEnd {
+        content: content.to_string(),
+        entry_index,
+        env,
+    });
+    Ok(results)
+}
+
+fn run_to_end_inner(
+    content: &str,
+    entry_index: usize,
+    env: Option<HashMap<String, String>>,
+) -> Result<Vec<ExecutionResult>, String> {
+    let results = run_file_inner(content, env)?;
     Ok(results
         .into_iter()
         .filter(|r| r.entry_index >= entry_index)
@@ -209,7 +340,21 @@ pub fn run_from_begin(
     entry_index: usize,
     env: Option<HashMap<String, String>>,
 ) -> Result<Vec<ExecutionResult>, String> {
-    let results = run_file(content, env)?;
+    let results = run_from_begin_inner(content, entry_index, env.clone())?;
+    remember_last(LastExecutionCommand::RunFromBegin {
+        content: content.to_string(),
+        entry_index,
+        env,
+    });
+    Ok(results)
+}
+
+fn run_from_begin_inner(
+    content: &str,
+    entry_index: usize,
+    env: Option<HashMap<String, String>>,
+) -> Result<Vec<ExecutionResult>, String> {
+    let results = run_file_inner(content, env)?;
     Ok(results
         .into_iter()
         .filter(|r| r.entry_index <= entry_index)
@@ -217,6 +362,20 @@ pub fn run_from_begin(
 }
 
 pub fn run_selection(
+    content: &str,
+    selection: SelectionRange,
+    env: Option<HashMap<String, String>>,
+) -> Result<ExecutionResult, String> {
+    let result = run_selection_inner(content, selection.clone(), env.clone())?;
+    remember_last(LastExecutionCommand::RunSelection {
+        content: content.to_string(),
+        selection,
+        env,
+    });
+    Ok(result)
+}
+
+fn run_selection_inner(
     content: &str,
     selection: SelectionRange,
     env: Option<HashMap<String, String>>,
@@ -265,10 +424,22 @@ pub fn run_selection(
     )
     .map_err(|e| format!("Failed to run selection: {:?}", e))?;
 
-    convert_hurl_result_to_execution_result(&result, 0)
+    convert_hurl_result_to_execution_result(&result, 0, &selected_content)
 }
 
 pub fn run_file(
+    content: &str,
+    env: Option<HashMap<String, String>>,
+) -> Result<Vec<ExecutionResult>, String> {
+    let results = run_file_inner(content, env.clone())?;
+    remember_last(LastExecutionCommand::RunFile {
+        content: content.to_string(),
+        env,
+    });
+    Ok(results)
+}
+
+fn run_file_inner(
     content: &str,
     env: Option<HashMap<String, String>>,
 ) -> Result<Vec<ExecutionResult>, String> {
@@ -282,7 +453,7 @@ pub fn run_file(
     let mut results = Vec::new();
 
     for (index, entry) in result.entries.iter().enumerate() {
-        match convert_entry_to_execution_result(entry, index) {
+        match convert_entry_to_execution_result(entry, index, content) {
             Ok(exec_result) => results.push(exec_result),
             Err(e) => {
                 results.push(ExecutionResult {
@@ -298,15 +469,12 @@ pub fn run_file(
         }
     }
 
-    if results.is_empty() && !result.errors().is_empty() {
-        let error_msg = result
-            .errors()
-            .into_iter()
-            .map(|(e, _)| format!("{:?}", e.kind))
-            .collect::<Vec<_>>()
-            .join(", ");
+    if results.is_empty() {
+        if let Some(error_msg) = format_runner_errors(&result, content) {
+            return Err(error_msg);
+        }
 
-        return Err(error_msg);
+        return Err("No executable entries found".to_string());
     }
 
     Ok(results)
@@ -316,7 +484,7 @@ pub fn test_file(
     content: &str,
     env: Option<HashMap<String, String>>,
 ) -> Result<TestFileResponse, String> {
-    let results = run_file(content, env)?;
+    let results = run_file_inner(content, env)?;
 
     let mut total_assertions = 0;
     let mut passed_assertions = 0;
@@ -345,9 +513,46 @@ pub fn test_file(
 }
 
 pub fn rerun_last() -> Result<ExecutionResult, String> {
-    // Placeholder implementation
-    // In a real implementation, this would track and rerun the last command
-    Err("Rerun last not yet implemented".to_string())
+    let command = {
+        let guard = last_execution_store()
+            .lock()
+            .map_err(|_| "Last execution state unavailable".to_string())?;
+        guard.clone()
+    }
+    .ok_or_else(|| "No previous run available to rerun".to_string())?;
+
+    match command {
+        LastExecutionCommand::RunEntry {
+            content,
+            entry_index,
+            env,
+        } => run_entry_inner(&content, entry_index, env),
+        LastExecutionCommand::RunSelection {
+            content,
+            selection,
+            env,
+        } => run_selection_inner(&content, selection, env),
+        LastExecutionCommand::RunToEnd {
+            content,
+            entry_index,
+            env,
+        } => {
+            let results = run_to_end_inner(&content, entry_index, env)?;
+            last_result_or_error(results, "run-to-end")
+        }
+        LastExecutionCommand::RunFromBegin {
+            content,
+            entry_index,
+            env,
+        } => {
+            let results = run_from_begin_inner(&content, entry_index, env)?;
+            last_result_or_error(results, "run-from-begin")
+        }
+        LastExecutionCommand::RunFile { content, env } => {
+            let results = run_file_inner(&content, env)?;
+            last_result_or_error(results, "run-file")
+        }
+    }
 }
 
 pub fn cancel_execution(run_id: &str) -> Result<CancelResponse, String> {
@@ -376,23 +581,24 @@ fn build_variables(env: &Option<HashMap<String, String>>) -> VariableSet {
 fn convert_hurl_result_to_execution_result(
     result: &hurl::runner::HurlResult,
     entry_index: usize,
+    content: &str,
 ) -> Result<ExecutionResult, String> {
     let entry = result
         .entries
         .first()
         .ok_or_else(|| "No entry found in Hurl result".to_string())?;
 
-    convert_entry_to_execution_result(entry, entry_index)
+    convert_entry_to_execution_result(entry, entry_index, content)
 }
 
 fn convert_entry_to_execution_result(
     entry: &hurl::runner::EntryResult,
     entry_index: usize,
+    content: &str,
 ) -> Result<ExecutionResult, String> {
-    let call = entry
-        .calls
-        .first()
-        .ok_or_else(|| "No call found in entry".to_string())?;
+    let call = entry.calls.first().ok_or_else(|| {
+        format_entry_errors(entry, content).unwrap_or_else(|| "No call found in entry".to_string())
+    })?;
 
     let status = u16::try_from(call.response.status).unwrap_or(0);
 
@@ -428,7 +634,10 @@ fn convert_entry_to_execution_result(
             transfer_time_ms: transfer_ms,
         }),
         assertions,
-        error: entry.errors.first().map(|e| format!("{:?}", e.kind)),
+        error: entry
+            .errors
+            .first()
+            .map(|e| format_runner_error(e, content)),
     })
 }
 

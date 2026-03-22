@@ -150,7 +150,7 @@ pub fn rerun_last_route() -> impl Filter<Extract = impl Reply, Error = Rejection
         .and(warp::path("rerun-last"))
         .map(|| match execution::rerun_last() {
             Ok(result) => ok_json(&result).into_response(),
-            Err(error) => err_json(StatusCode::NOT_IMPLEMENTED, error).into_response(),
+            Err(error) => err_json(StatusCode::BAD_REQUEST, error).into_response(),
         })
 }
 
