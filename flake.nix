@@ -62,6 +62,7 @@
 
           nativeBuildInputs = [
             linuxPkgs.nodejs
+            linuxPkgs.pnpm
             linuxPkgs.pnpmConfigHook
           ];
 
