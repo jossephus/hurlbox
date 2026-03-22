@@ -6,28 +6,23 @@ members = [
 ]
 resolver = "2"
 
-# Config for 'dist'
+# cargo-dist options
 [workspace.metadata.dist]
-# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.31.0"
-# Whether to install an updater program
 install-updater = false
-# CI backends to support
 ci = "github"
-# The installers to generate for each app
 installers = ["shell"]
-# Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
-# Only dist/publish the server app
 apps = ["hurlbox"]
-# Path that installers should place binaries in
-install-path = "$HOME/.hurlbox/bin"
-# Whether to auto-include files like READMEs, LICENSEs, and CHANGELOGs (default true)
-auto-includes = true
-# Extra setup steps to run in GitHub CI before building artifacts
+auto-includes = false
 github-build-setup = "../github-build-setup.yml"
 
-# The profile that 'dist' will build with
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
 [profile.dist]
 inherits = "release"
-lto = "thin"

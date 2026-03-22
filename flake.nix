@@ -127,8 +127,8 @@
           config = {
             Cmd = ["/bin/hurlbox"];
             Env = [
-              "PORT=3030"
-              "HOST=0.0.0.0"
+              "HURLBOX_HOST=0.0.0.0"
+              "HURLBOX_PORT=3030"
             ];
             ExposedPorts = {
               "3030/tcp" = { };

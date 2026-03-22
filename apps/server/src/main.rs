@@ -13,19 +13,19 @@ use warp::Reply;
 #[command(name = "hurlbox-server", version, about = "Hurlbox API server")]
 struct Cli {
     /// Path to an env file to load default variables
-    #[arg(short, long = "env-file")]
+    #[arg(short, long = "env-file", env = "HURLBOX_ENV_FILE")]
     env_file: Option<String>,
 
     /// Root directory to scan for .hurl files (default: current directory)
-    #[arg(short, long)]
+    #[arg(short, long, env = "HURLBOX_DIR")]
     dir: Option<String>,
 
     /// Host to bind to
-    #[arg(long, default_value = "0.0.0.0")]
+    #[arg(long, env = "HURLBOX_HOST", default_value = "0.0.0.0")]
     host: String,
 
     /// Port to listen on
-    #[arg(short, long, default_value_t = 3030)]
+    #[arg(short, long, env = "HURLBOX_PORT", default_value_t = 3030)]
     port: u16,
 }
 

@@ -58,6 +58,8 @@ docker run --rm -p 3030:3030 \
   --dir /workspace
 ```
 
+You can checkout the setup at @examples/docker-compose.yml to see an example.
+
 ### CLI Options
 
 ```bash

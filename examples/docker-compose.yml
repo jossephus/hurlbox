@@ -1,0 +1,16 @@
+services:
+  hurlbox:
+    image: jossephus/hurlbox:latest
+    ports:
+      - "${HURLBOX_PORT:-3030}:3030"
+    volumes:
+      - ./hurlbox:/workspace
+      - ./hurlbox/.env:/workspace/.env
+    env_file:
+      - .env
+    environment:
+      HURLBOX_DIR: /workspace
+      HURLBOX_ENV_FILE: /workspace/.env
+      HURLBOX_HOST: 0.0.0.0
+      HURLBOX_PORT: 3030
+    restart: unless-stopped
