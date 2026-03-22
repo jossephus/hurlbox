@@ -2,6 +2,10 @@
 name = "hurlbox-desktop"
 version = "0.1.0"
 edition = "2024"
+repository = "https://github.com/jossephus/hurlbox"
+
+[package.metadata.dist]
+dist = false
 
 [dependencies]
 hurl_builder = { path = "../../crates/hurl_builder" }

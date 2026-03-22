@@ -1,6 +1,6 @@
 # Hurlbox
 
-> A web-based single-binary hurl tests runner [Hurl](https://hurl.dev/) — run tests individually, see responses in real time.
+> A web-based single-binary [hurl](https://hurl.dev) tests runner: run tests individually, see responses in real time.
 
 <p align="center">
   <img src="./assets/hurlbox-dark.png" alt="Hurlbox Dark Theme" />
@@ -24,13 +24,7 @@ I love Hurl and its file based testing mechanisms, but I don't like that it does
 ### macOS / Linux
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/aranshi/hurlbox/releases/latest/download/hurlbox-installer.sh | sh
-```
-
-### Windows
-
-```powershell
-powershell -c "irm https://github.com/aranshi/hurlbox/releases/latest/download/hurlbox-installer.ps1 | iex"
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/jossephus/hurlbox/releases/latest/download/hurlbox-installer.sh | sh
 ```
 
 ## Quick Start

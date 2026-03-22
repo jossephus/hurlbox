@@ -1,0 +1,12 @@
+- name: Setup Node.js
+  uses: actions/setup-node@v4
+  with:
+    node-version: "20"
+
+- name: Build frontend
+  shell: bash
+  run: |
+    corepack enable
+    cd web
+    pnpm install --frozen-lockfile
+    pnpm build
