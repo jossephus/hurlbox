@@ -1,7 +1,14 @@
 [package]
-name = "hurlbox-server"
+name = "hurlbox"
 version = "0.1.0"
 edition = "2024"
+description = "A web-based IDE and server for Hurl HTTP test files"
+readme = "../../README.md"
+license = "MIT"
+
+[[bin]]
+name = "hurlbox"
+path = "src/main.rs"
 
 [dependencies]
 warp = "0.3"

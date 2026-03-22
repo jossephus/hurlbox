@@ -2490,20 +2490,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hurlbox-desktop"
-version = "0.1.0"
-dependencies = [
- "gpui",
- "hurl",
- "hurl_builder",
- "hurl_core",
- "serde",
- "serde_json",
- "unicode-segmentation",
-]
-
-[[package]]
-name = "hurlbox-server"
+name = "hurlbox"
 version = "0.1.0"
 dependencies = [
  "clap",
@@ -2518,6 +2505,19 @@ dependencies = [
  "serde_json",
  "tokio",
  "warp",
+]
+
+[[package]]
+name = "hurlbox-desktop"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "hurl",
+ "hurl_builder",
+ "hurl_core",
+ "serde",
+ "serde_json",
+ "unicode-segmentation",
 ]
 
 [[package]]

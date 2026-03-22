@@ -1,6 +1,6 @@
 # Hurlbox
 
-> A web-based single-binary web based runner for [Hurl](https://hurl.dev/) — run tests individually, see responses in real time.
+> A web-based single-binary hurl tests runner [Hurl](https://hurl.dev/) — run tests individually, see responses in real time.
 
 <p align="center">
   <img src="./assets/hurlbox-dark.png" alt="Hurlbox Dark Theme" />
@@ -18,6 +18,20 @@ I love Hurl and its file based testing mechanisms, but I don't like that it does
 - **Environment Variables** - load `.env` files for request substitution
 - **Response Viewer** with JSON formatting
 - **Request/Headers/Response** tabs for detailed inspection
+
+## Installation
+
+### macOS / Linux
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/aranshi/hurlbox/releases/latest/download/hurlbox-installer.sh | sh
+```
+
+### Windows
+
+```powershell
+powershell -c "irm https://github.com/aranshi/hurlbox/releases/latest/download/hurlbox-installer.ps1 | iex"
+```
 
 ## Quick Start
 
