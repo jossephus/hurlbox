@@ -37,6 +37,27 @@ hurlbox
 
 The server runs on `http://localhost:3030` by default.
 
+## Docker image (Docker Hub)
+
+The public image is available on Docker Hub:
+
+- `jossephus/hurlbox:latest`
+
+Pull it directly:
+
+```bash
+docker pull jossephus/hurlbox:latest
+```
+
+Run it locally:
+
+```bash
+docker run --rm -p 3030:3030 \
+  -v "$(pwd):/workspace" \
+  jossephus/hurlbox:latest \
+  --dir /workspace
+```
+
 ### CLI Options
 
 ```bash
