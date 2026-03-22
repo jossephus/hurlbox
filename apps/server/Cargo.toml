@@ -5,6 +5,7 @@ edition = "2024"
 description = "A web-based IDE and server for Hurl HTTP test files"
 readme = "../../README.md"
 license = "MIT"
+repository = "https://github.com/jossephus/hurlbox"
 
 [[bin]]
 name = "hurlbox"

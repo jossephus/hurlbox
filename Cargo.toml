@@ -6,28 +6,26 @@ members = [
 ]
 resolver = "2"
 
-# Config for 'cargo dist'
+# Config for 'dist'
 [workspace.metadata.dist]
-# The preferred cargo-dist version to use in CI (shipped with spaceman)
-cargo-dist-version = "0.25.1"
-# The preferred tag to use when installing the CLI (shipped with spaceman)
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.31.0"
+# Whether to install an updater program
 install-updater = false
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
-installers = ["shell", "powershell"]
+installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = [
-    "aarch64-apple-darwin",
-    "x86_64-apple-darwin",
-    "aarch64-unknown-linux-gnu",
-    "x86_64-unknown-linux-gnu",
-    "aarch64-pc-windows-msvc",
-    "x86_64-pc-windows-msvc",
-]
-# Which apps to dist
-# apps = ["hurlbox-server"]
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
 # Path that installers should place binaries in
 install-path = "$HOME/.hurlbox/bin"
-# Whether to auto-include files like README, LICENSE
+# Whether to auto-include files like READMEs, LICENSEs, and CHANGELOGs (default true)
 auto-includes = true
+# Extra setup steps to run in GitHub CI before building artifacts
+github-build-setup = "github-build-setup.yml"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
