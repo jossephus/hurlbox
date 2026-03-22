@@ -33,15 +33,23 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Tag image
+        run: |
+          docker tag hurlbox:latest jossephus/hurlbox:latest
+
+      - name: Tag version image
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           VERSION_TAG: ${{ github.ref_name }}
         run: |
-          docker tag hurlbox:latest jossephus/hurlbox:latest
           docker tag hurlbox:latest jossephus/hurlbox:${VERSION_TAG}
 
       - name: Push image tags
+        run: |
+          docker push jossephus/hurlbox:latest
+
+      - name: Push version tag
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           VERSION_TAG: ${{ github.ref_name }}
         run: |
-          docker push jossephus/hurlbox:latest
           docker push jossephus/hurlbox:${VERSION_TAG}
