@@ -813,7 +813,7 @@ function App() {
           fontFamily: 'var(--font-mono)',
         }}
       >
-        <span>{isLoading ? 'running...' : 'ready'}</span>
+        <span>{isLoading ? 'running...' : ''}</span>
         <span>hurlbox</span>
       </footer>
     </div>
