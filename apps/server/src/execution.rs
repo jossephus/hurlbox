@@ -1,14 +1,10 @@
-use crate::models::*;
+use crate::api::models::*;
 use hurl::runner::{self, AssertResult, RunnerOptionsBuilder, Value, VariableSet};
 use hurl::util::logger::LoggerOptionsBuilder;
 use hurl_core::error::{DisplaySourceError, OutputFormat};
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
-
-pub struct ExecutionHandle {
-    // Placeholder for managing running executions
-}
 
 #[derive(Clone)]
 enum LastExecutionCommand {
@@ -194,8 +190,7 @@ fn line_matches_request(line: &str, method_upper: &str, url: Option<&str>) -> bo
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_hurl_entries, run_entry, run_selection};
-    use crate::models::SelectionRange;
+    use super::{parse_hurl_entries, run_entry, run_selection, SelectionRange};
 
     #[test]
     fn parses_last_entry_without_missing_run_line() {
@@ -644,6 +639,12 @@ fn run_file_inner(
             Err(e) => {
                 results.push(ExecutionResult {
                     entry_index: index,
+                    request: RequestInfo {
+                        method: String::new(),
+                        url: String::new(),
+                        headers: HashMap::new(),
+                        body: None,
+                    },
                     status: 0,
                     headers: HashMap::new(),
                     body: String::new(),
@@ -741,14 +742,6 @@ pub fn rerun_last() -> Result<ExecutionResult, String> {
     }
 }
 
-pub fn cancel_execution(run_id: &str) -> Result<CancelResponse, String> {
-    // Placeholder implementation
-    Ok(CancelResponse {
-        success: true,
-        message: format!("Cancellation requested for run ID: {}", run_id),
-    })
-}
-
 // Helper functions
 fn build_runner_options(_env: &Option<HashMap<String, String>>) -> runner::RunnerOptions {
     RunnerOptionsBuilder::new().build()
@@ -786,6 +779,22 @@ fn convert_entry_to_execution_result(
         format_entry_errors(entry, content).unwrap_or_else(|| "No call found in entry".to_string())
     })?;
 
+    let request = RequestInfo {
+        method: call.request.method.to_string(),
+        url: call.request.url.to_string(),
+        headers: call
+            .request
+            .headers
+            .iter()
+            .map(|h| (h.name.clone(), h.value.clone()))
+            .collect(),
+        body: if call.request.body.is_empty() {
+            None
+        } else {
+            Some(String::from_utf8_lossy(&call.request.body).into_owned())
+        },
+    };
+
     let status = u16::try_from(call.response.status).unwrap_or(0);
 
     let headers: HashMap<String, String> = call
@@ -810,6 +819,7 @@ fn convert_entry_to_execution_result(
 
     Ok(ExecutionResult {
         entry_index,
+        request,
         status,
         headers,
         body,

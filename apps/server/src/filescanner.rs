@@ -1,227 +1,184 @@
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FileNode {
     pub name: String,
-    pub relative_path: String, // Relative path for display
+    pub relative_path: String,
     #[serde(rename = "type")]
-    pub node_type: String, // "file" or "folder"
+    pub node_type: String,
     pub children: Option<Vec<FileNode>>,
 }
 
 static CURRENT_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
+#[derive(Default)]
+struct TreeNode {
+    folders: BTreeMap<String, TreeNode>,
+    files: Vec<String>,
+}
+
 pub fn set_current_root(root: &str) {
     let _ = CURRENT_ROOT.set(PathBuf::from(root));
 }
 
-pub fn get_current_root() -> Option<&'static PathBuf> {
-    CURRENT_ROOT.get()
+fn current_root() -> Result<&'static PathBuf, String> {
+    CURRENT_ROOT
+        .get()
+        .ok_or_else(|| "No root path set. Open a file explorer first.".to_string())
 }
 
-pub fn resolve_relative_path(relative_path: &str) -> Result<PathBuf, String> {
-    let root = CURRENT_ROOT
-        .get()
-        .ok_or_else(|| "No root path set. Open a file explorer first.".to_string())?;
-
-    let path = root.join(relative_path);
-    let canonical = path
+fn resolve_existing_path(relative_path: &str) -> Result<PathBuf, String> {
+    let root = current_root()?;
+    let canonical = root
+        .join(relative_path)
         .canonicalize()
         .map_err(|e| format!("Failed to resolve path: {}", e))?;
 
-    // Ensure the resolved path is still within the root (security check)
     if !canonical.starts_with(root) {
         return Err("Path is outside the root directory".to_string());
     }
-
     Ok(canonical)
 }
 
-const DEFAULT_IGNORED_NAMES: &[&str] = &[
-    ".git",
-    ".svn",
-    ".hg",
-    ".DS_Store",
-    "node_modules",
-    "target",
-    "__pycache__",
-    ".pytest_cache",
-    ".venv",
-    "venv",
-    ".env",
-    "dist",
-    "build",
-    ".next",
-    ".nuxt",
-    "*.lock",
-    "package-lock.json",
-    "yarn.lock",
-    "pnpm-lock.yaml",
-    "Cargo.lock",
-];
+fn resolve_for_create(relative_path: &str) -> Result<PathBuf, String> {
+    let root = current_root()?;
+    let candidate = root.join(relative_path);
+    let parent = candidate
+        .parent()
+        .ok_or_else(|| "Invalid target path".to_string())?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve parent path: {}", e))?;
 
-fn is_ignored(name: &str, ignored_patterns: &HashSet<String>) -> bool {
-    // Check hidden files (starting with .)
-    if name.starts_with('.') && name != "." && name != ".." && name != ".hurl" {
-        return true;
+    if !canonical_parent.starts_with(root) {
+        return Err("Path is outside the root directory".to_string());
     }
-
-    // Check against ignored patterns
-    if ignored_patterns.contains(name) {
-        return true;
-    }
-
-    // Check default ignored names
-    for &ignored in DEFAULT_IGNORED_NAMES {
-        if name == ignored {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn parse_gitignore(dir_path: &Path) -> HashSet<String> {
-    let mut patterns = HashSet::new();
-
-    // Add default patterns
-    for &pattern in DEFAULT_IGNORED_NAMES {
-        patterns.insert(pattern.to_string());
-    }
-
-    // Try to read .gitignore
-    let gitignore_path = dir_path.join(".gitignore");
-    if let Ok(content) = std::fs::read_to_string(&gitignore_path) {
-        for line in content.lines() {
-            let trimmed = line.trim();
-            // Skip empty lines and comments
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-            // Remove trailing slash for directories
-            let pattern = trimmed.trim_end_matches('/');
-            patterns.insert(pattern.to_string());
-        }
-    }
-
-    patterns
+    Ok(candidate)
 }
 
 pub fn scan_directory(root_path: &str) -> Result<FileNode, String> {
-    let path = Path::new(root_path);
-    if !path.exists() {
+    let root = Path::new(root_path);
+    if !root.exists() {
         return Err(format!("Path does not exist: {}", root_path));
     }
-    if !path.is_dir() {
+    if !root.is_dir() {
         return Err(format!("Path is not a directory: {}", root_path));
     }
 
-    // Store the absolute root path for subsequent file operations
-    let absolute_root = path
+    let absolute_root = root
         .canonicalize()
         .map_err(|e| format!("Failed to resolve root path: {}", e))?;
     set_current_root(absolute_root.to_string_lossy().as_ref());
 
-    let ignored_patterns = parse_gitignore(path);
-    let result = build_file_tree(path, root_path, &ignored_patterns);
+    let mut tree = TreeNode::default();
+    let walker = ignore::WalkBuilder::new(&absolute_root)
+        .hidden(false)
+        .git_ignore(true)
+        .ignore(true)
+        .git_exclude(false)
+        .git_global(false)
+        .build();
 
-    // Return None if no hurl files found
-    match result {
-        Some(node) => Ok(node),
-        None => Err("No .hurl files found in directory".to_string()),
+    for entry in walker {
+        let entry = entry.map_err(|e| format!("Failed to walk directory: {}", e))?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("hurl") {
+            continue;
+        }
+
+        let relative = path
+            .strip_prefix(&absolute_root)
+            .map_err(|e| format!("Failed to compute relative path: {}", e))?;
+        insert_file(&mut tree, relative);
+    }
+
+    let children = build_children(&tree, "");
+    if children.is_empty() {
+        return Err("No .hurl files found in directory".to_string());
+    }
+
+    Ok(FileNode {
+        name: root
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| root.to_string_lossy().to_string()),
+        relative_path: String::new(),
+        node_type: "folder".to_string(),
+        children: Some(children),
+    })
+}
+
+fn insert_file(tree: &mut TreeNode, relative: &Path) {
+    let mut current = tree;
+    let mut parts = relative
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+
+    if let Some(file_name) = parts.pop() {
+        for part in parts {
+            current = current.folders.entry(part).or_default();
+        }
+        current.files.push(file_name);
     }
 }
 
-fn build_file_tree(
-    path: &Path,
-    root_path: &str,
-    ignored_patterns: &HashSet<String>,
-) -> Option<FileNode> {
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.to_string_lossy().to_string());
+fn build_children(tree: &TreeNode, base: &str) -> Vec<FileNode> {
+    let mut out = Vec::new();
 
-    // Skip ignored files/folders
-    if is_ignored(&name, ignored_patterns) {
-        return None;
-    }
-
-    let relative_path = if path == Path::new(root_path) {
-        String::new()
-    } else {
-        path.strip_prefix(root_path)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .to_string()
-    };
-
-    if path.is_dir() {
-        let mut children: Vec<FileNode> = Vec::new();
-
-        if let Ok(entries) = std::fs::read_dir(path) {
-            let mut sorted_entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-            sorted_entries.sort_by(|a, b| {
-                let a_is_dir = a.path().is_dir();
-                let b_is_dir = b.path().is_dir();
-                match (a_is_dir, b_is_dir) {
-                    (true, false) => std::cmp::Ordering::Less,
-                    (false, true) => std::cmp::Ordering::Greater,
-                    _ => a.file_name().cmp(&b.file_name()),
-                }
-            });
-
-            for entry in sorted_entries {
-                let entry_path = entry.path();
-                if let Some(child) = build_file_tree(&entry_path, root_path, ignored_patterns) {
-                    children.push(child);
-                }
-            }
-        }
-
-        // Only include folder if it has children (contains hurl files)
-        if children.is_empty() {
-            None
+    for (folder_name, folder_node) in &tree.folders {
+        let rel = if base.is_empty() {
+            folder_name.clone()
         } else {
-            Some(FileNode {
-                name,
-                relative_path,
+            format!("{}/{}", base, folder_name)
+        };
+
+        let children = build_children(folder_node, &rel);
+        if !children.is_empty() {
+            out.push(FileNode {
+                name: folder_name.clone(),
+                relative_path: rel,
                 node_type: "folder".to_string(),
                 children: Some(children),
-            })
-        }
-    } else {
-        // Only include .hurl files
-        if name.ends_with(".hurl") {
-            Some(FileNode {
-                name,
-                relative_path,
-                node_type: "file".to_string(),
-                children: None,
-            })
-        } else {
-            None
+            });
         }
     }
+
+    let mut files = tree.files.clone();
+    files.sort();
+    for file_name in files {
+        let rel = if base.is_empty() {
+            file_name.clone()
+        } else {
+            format!("{}/{}", base, file_name)
+        };
+        out.push(FileNode {
+            name: file_name,
+            relative_path: rel,
+            node_type: "file".to_string(),
+            children: None,
+        });
+    }
+
+    out
 }
 
 pub fn read_file(relative_path: &str) -> Result<String, String> {
-    let path = resolve_relative_path(relative_path)?;
-    if !path.exists() {
-        return Err(format!("File does not exist: {}", relative_path));
-    }
+    let path = resolve_existing_path(relative_path)?;
     if !path.is_file() {
         return Err(format!("Path is not a file: {}", relative_path));
     }
-
     std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))
 }
 
 pub fn create_file(relative_path: &str, content: Option<&str>) -> Result<String, String> {
-    let path = resolve_relative_path(relative_path)?;
+    let path = resolve_for_create(relative_path)?;
 
     if let Some(parent) = path.parent() {
         if !parent.exists() {
@@ -231,22 +188,17 @@ pub fn create_file(relative_path: &str, content: Option<&str>) -> Result<String,
             ));
         }
     }
-
     if path.exists() {
         return Err(format!("File already exists: {}", relative_path));
     }
 
-    let content = content.unwrap_or("");
-    std::fs::write(&path, content).map_err(|e| format!("Failed to create file: {}", e))?;
-
+    std::fs::write(&path, content.unwrap_or(""))
+        .map_err(|e| format!("Failed to create file: {}", e))?;
     Ok(relative_path.to_string())
 }
 
 pub fn write_file(relative_path: &str, content: &str) -> Result<String, String> {
-    let path = resolve_relative_path(relative_path)?;
-    if !path.exists() {
-        return Err(format!("File does not exist: {}", relative_path));
-    }
+    let path = resolve_existing_path(relative_path)?;
     if !path.is_file() {
         return Err(format!("Path is not a file: {}", relative_path));
     }

@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect, type ChangeEvent } from 'react'
 import Editor, { type OnMount } from '@monaco-editor/react'
 import type * as monaco from 'monaco-editor'
-import { TestTube2, FileText, FileCode, Sun, Moon, Loader2, FolderOpen, Folder, Save } from 'lucide-react'
+import { TestTube2, FileText, FileCode, Sun, Moon, Loader2, FolderOpen, Folder, Save, Key } from 'lucide-react'
 import { ResponseViewer } from './components/ResponseViewer'
 import { FileExplorer } from './components/FileExplorer'
 import { registerHurlLanguage } from './lib/hurl-lang'
@@ -9,6 +9,12 @@ import './App.css'
 
 interface ExecutionResult {
   entry_index: number
+  request: {
+    method: string
+    url: string
+    headers: Record<string, string>
+    body?: string
+  }
   status: number
   headers: Record<string, string>
   body: string
@@ -102,15 +108,7 @@ function App() {
   const [content, setContent] = useState(SAMPLE_HURL)
   const [response, setResponse] = useState<string>('')
   const [responseHeaders, setResponseHeaders] = useState<Record<string, string>>({})
-  const [responseAssertions, setResponseAssertions] = useState<Array<{ query: string; passed: boolean }>>([])
-  const [responseTiming, setResponseTiming] = useState<{ 
-    duration_ms: number
-    connect_time_ms?: number
-    tls_time_ms?: number
-    transfer_time_ms?: number
-  } | null>(null)
-  const [activeTab, setActiveTab] = useState<'response' | 'headers' | 'asserts' | 'request' | 'timing'>('response')
-  const [lastRequest, setLastRequest] = useState<{ method: string; url: string } | null>(null)
+  const [activeTab, setActiveTab] = useState<'response' | 'headers' | 'request'>('response')
   const [isLoading, setIsLoading] = useState(false)
   const [entries, setEntries] = useState<EntryInfo[]>([])
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
@@ -248,11 +246,6 @@ function App() {
       if (mode === 'entry' && entryIndex !== undefined) {
         endpoint = '/api/run-entry'
         body = { content, entry_index: entryIndex, env }
-        // Store request info for display
-        const entry = entries.find(e => e.index === entryIndex)
-        if (entry) {
-          setLastRequest({ method: entry.method, url: entry.url })
-        }
       } else if (mode === 'test') {
         endpoint = '/api/test-file'
       }
@@ -282,10 +275,8 @@ function App() {
         }
       }
       
-      // Extract assertions and timing
+      // Store result for request tab and other uses
       if (firstResult) {
-        setResponseAssertions(firstResult.assertions || [])
-        setResponseTiming(firstResult.timing || null)
         setLastRunResult(firstResult)
       } else {
         setLastRunResult(null)
@@ -299,12 +290,10 @@ function App() {
     } catch (error) {
       setResponse(`✗ Error: ${error}`)
       setResponseHeaders({})
-      setResponseAssertions([])
-      setResponseTiming(null)
     } finally {
       setIsLoading(false)
     }
-    }, [content, entries, envInput])
+    }, [content, envInput])
 
   useEffect(() => { runRequestRef.current = runRequest }, [runRequest])
 
@@ -377,6 +366,10 @@ function App() {
 
     editor.addCommand(monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.Enter, () => {
       runRequestRef.current?.('entry', currentEntry)
+    })
+
+    editor.addCommand(monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyS, () => {
+      handleSaveFile()
     })
   }
 
@@ -496,7 +489,7 @@ function App() {
           <button
             type="button"
             onClick={() => envFileInputRef.current?.click()}
-            className="px-3 py-1.5 text-xs rounded transition-colors"
+            className="px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1.5"
             style={{ 
               color: (envFileName || serverEnvFileName) ? 'var(--text-primary)' : 'var(--text-secondary)',
               background: (envFileName || serverEnvFileName) ? 'var(--bg-elevated)' : 'transparent',
@@ -504,6 +497,7 @@ function App() {
             }}
             title={envFileName ? `UI env file: ${envFileName}` : (serverEnvFileName ? `Server env file: ${serverEnvFileName}` : 'Load env file')}
           >
+            <Key className="w-3.5 h-3.5" />
             {envFileName ? `Env: ${envFileName}` : (serverEnvFileName ? `Env (server): ${serverEnvFileName}` : 'Load Env')}
           </button>
           <input
@@ -696,7 +690,7 @@ function App() {
           >
             <div className="flex items-center gap-1">
               {/* Tabs */}
-              {(['response', 'headers', 'asserts', 'request', 'timing'] as const).map((tab) => (
+              {(['response', 'headers', 'request'] as const).map((tab) => (
                 <button
                   key={tab}
                   type="button"
@@ -738,73 +732,38 @@ function App() {
               </div>
             )}
             
-            {activeTab === 'asserts' && (
-              <div className="text-xs" style={{ fontFamily: 'var(--font-mono)' }}>
-                {responseAssertions.length > 0 ? (
-                  <div className="space-y-2">
-                    {responseAssertions.map((assertion) => (
-                      <div key={assertion.query} className="flex items-center gap-2 p-2 rounded" style={{ background: 'var(--bg-elevated)' }}>
-                        <span className={assertion.passed ? 'text-green-400' : 'text-red-400'}>
-                          {assertion.passed ? '✓' : '✗'}
-                        </span>
-                        <span style={{ color: 'var(--text-primary)' }}>{assertion.query}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <span style={{ color: 'var(--text-muted)' }}>No assertions</span>
-                )}
-              </div>
-            )}
-            
             {activeTab === 'request' && (
               <div className="text-xs" style={{ fontFamily: 'var(--font-mono)' }}>
-                {lastRequest ? (
-                  <div className="space-y-2">
+                {lastRunResult?.request ? (
+                  <div className="space-y-3">
                     <div className="p-2 rounded" style={{ background: 'var(--bg-elevated)' }}>
                       <div className="flex items-center gap-2">
-                        <span style={{ color: 'var(--accent-cyan)' }}>{lastRequest.method}</span>
-                        <span style={{ color: 'var(--text-secondary)' }}>{lastRequest.url}</span>
+                        <span style={{ color: 'var(--accent-cyan)' }}>{lastRunResult.request.method}</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>{lastRunResult.request.url}</span>
                       </div>
                     </div>
+                    {Object.keys(lastRunResult.request.headers).length > 0 && (
+                      <div className="p-2 rounded" style={{ background: 'var(--bg-elevated)' }}>
+                        <div className="text-[10px] mb-1" style={{ color: 'var(--text-muted)' }}>Request Headers</div>
+                        {Object.entries(lastRunResult.request.headers).map(([key, value]) => (
+                          <div key={key} className="flex flex-col gap-0.5">
+                            <span style={{ color: 'var(--accent-cyan)' }}>{key}</span>
+                            <span style={{ color: 'var(--text-secondary)' }}>{value}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {lastRunResult.request.body && (
+                      <div className="p-2 rounded" style={{ background: 'var(--bg-elevated)' }}>
+                        <div className="text-[10px] mb-1" style={{ color: 'var(--text-muted)' }}>Request Body</div>
+                        <pre className="whitespace-pre-wrap break-all" style={{ color: 'var(--text-secondary)' }}>
+                          {lastRunResult.request.body}
+                        </pre>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <span style={{ color: 'var(--text-muted)' }}>No request info</span>
-                )}
-              </div>
-            )}
-            
-            {activeTab === 'timing' && (
-              <div className="text-xs" style={{ fontFamily: 'var(--font-mono)' }}>
-                {responseTiming ? (
-                  <div className="space-y-2">
-                    <div className="p-2 rounded" style={{ background: 'var(--bg-elevated)' }}>
-                      <div className="flex justify-between">
-                        <span style={{ color: 'var(--text-muted)' }}>Total</span>
-                        <span style={{ color: 'var(--accent-cyan)' }}>{responseTiming.duration_ms}ms</span>
-                      </div>
-                      {responseTiming.connect_time_ms != null && (
-                        <div className="flex justify-between mt-1">
-                          <span style={{ color: 'var(--text-muted)' }}>Connect</span>
-                          <span style={{ color: 'var(--text-secondary)' }}>{responseTiming.connect_time_ms}ms</span>
-                        </div>
-                      )}
-                      {responseTiming.tls_time_ms != null && (
-                        <div className="flex justify-between mt-1">
-                          <span style={{ color: 'var(--text-muted)' }}>TLS</span>
-                          <span style={{ color: 'var(--text-secondary)' }}>{responseTiming.tls_time_ms}ms</span>
-                        </div>
-                      )}
-                      {responseTiming.transfer_time_ms != null && (
-                        <div className="flex justify-between mt-1">
-                          <span style={{ color: 'var(--text-muted)' }}>Transfer</span>
-                          <span style={{ color: 'var(--text-secondary)' }}>{responseTiming.transfer_time_ms}ms</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <span style={{ color: 'var(--text-muted)' }}>No timing info</span>
                 )}
               </div>
             )}
@@ -813,7 +772,7 @@ function App() {
             <button
               type="button"
               onClick={handleBuildAssertions}
-              className="px-3 py-2 rounded text-xs transition-colors"
+              className="px-3 py-2 rounded text-xs transition-all duration-200"
               style={{
                 position: 'absolute',
                 right: '12px',
@@ -823,11 +782,21 @@ function App() {
                 color: 'var(--text-primary)',
                 background: 'var(--bg-elevated)',
                 border: '1px solid var(--border-dim)',
-                boxShadow: '0 6px 18px rgba(0,0,0,0.18)',
+                boxShadow: '0 6px 18px rgba(0,0,0,0.18), 0 0 12px rgba(99, 102, 241, 0.15)',
                 opacity: lastRunEntryIndex != null && !!lastRunResult ? 1 : 0.6,
                 cursor: lastRunEntryIndex != null && !!lastRunResult ? 'pointer' : 'not-allowed',
               }}
               disabled={lastRunEntryIndex == null || !lastRunResult}
+              onMouseEnter={(e) => {
+                if (lastRunEntryIndex != null && !!lastRunResult) {
+                  e.currentTarget.style.boxShadow = '0 6px 18px rgba(0,0,0,0.25), 0 0 20px rgba(99, 102, 241, 0.3)'
+                  e.currentTarget.style.transform = 'translateY(-1px)'
+                }
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.boxShadow = '0 6px 18px rgba(0,0,0,0.18), 0 0 12px rgba(99, 102, 241, 0.15)'
+                e.currentTarget.style.transform = 'translateY(0)'
+              }}
             >
               Build Assertions
             </button>
