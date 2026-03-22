@@ -25,7 +25,7 @@ install-path = "$HOME/.hurlbox/bin"
 # Whether to auto-include files like READMEs, LICENSEs, and CHANGELOGs (default true)
 auto-includes = true
 # Extra setup steps to run in GitHub CI before building artifacts
-github-build-setup = ".github/github-build-setup.yml"
+github-build-setup = "../github-build-setup.yml"
 
 # The profile that 'dist' will build with
 [profile.dist]

@@ -47,15 +47,35 @@
               && baseName != "dist";
         };
 
-        frontendDist = linuxPkgs.buildNpmPackage {
+        frontendDist = linuxPkgs.stdenv.mkDerivation {
           pname = "hurlbox-web";
           version = "0.1.0";
           src = ./web;
-          npmDepsHash = linuxPkgs.lib.fakeHash;
-          npmBuildScript = "build";
+
+          pnpmDeps = linuxPkgs.fetchPnpmDeps {
+            pname = "hurlbox-web-deps";
+            version = "0.1.0";
+            src = ./web;
+            fetcherVersion = 1;
+            hash = linuxPkgs.lib.fakeHash;
+          };
+
+          nativeBuildInputs = [
+            linuxPkgs.nodejs
+            linuxPkgs.pnpmConfigHook
+          ];
+
+          buildPhase = ''
+            runHook preBuild
+            pnpm run build
+            runHook postBuild
+          '';
+
           installPhase = ''
+            runHook preInstall
             mkdir -p $out
             cp -r dist/* $out/
+            runHook postInstall
           '';
         };
 
