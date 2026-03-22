@@ -91,6 +91,7 @@
             nativeBuildInputs = [
               buildPkgs.pkg-config
               buildPkgs.clang
+              buildPkgs.llvmPackages.libclang
             ];
 
             buildInputs = [
@@ -99,6 +100,7 @@
             ];
 
             OPENSSL_NO_VENDOR = 1;
+            LIBCLANG_PATH = "${buildPkgs.llvmPackages.libclang.lib}/lib";
             doCheck = false;
 
             preBuild = ''
