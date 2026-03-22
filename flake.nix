@@ -57,7 +57,7 @@
             version = "0.1.0";
             src = ./web;
             fetcherVersion = 1;
-            hash = linuxPkgs.lib.fakeHash;
+            hash = "sha256-V0xXb9UzQVmyO7gvX3AZDtX+fbn2N+0Vl3GgFo4MElY=";
           };
 
           nativeBuildInputs = [
