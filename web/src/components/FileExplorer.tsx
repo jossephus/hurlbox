@@ -33,7 +33,7 @@ function FileTreeNode({
   const [isExpanded, setIsExpanded] = useState(depth < 2)
   const [isLoading, setIsLoading] = useState(false)
   const isFolder = node.type === 'folder'
-  const isSelected = node.path === selectedPath
+  const isSelected = node.relative_path === selectedPath
 
   const handleClick = async () => {
     if (isFolder) {
@@ -42,10 +42,10 @@ function FileTreeNode({
       // Load file content
       setIsLoading(true)
       try {
-        const res = await fetch(`/api/file?path=${encodeURIComponent(node.path)}`)
+        const res = await fetch(`/api/file?path=${encodeURIComponent(node.relative_path)}`)
         if (res.ok) {
           const data = await res.json()
-          onFileSelect(node.path, data.content)
+          onFileSelect(node.relative_path, data.content)
         }
       } catch (error) {
         console.error('Failed to load file:', error)
@@ -96,7 +96,7 @@ function FileTreeNode({
             title={`New file in ${node.name}`}
             onClick={(event) => {
               event.stopPropagation()
-              onCreateFile(node.path)
+              onCreateFile(node.relative_path)
             }}
           >
             <Plus className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
@@ -177,7 +177,7 @@ export function FileExplorer({ rootPath, refreshKey, onCreateFile, onFileSelect,
     <div className="py-1">
       {fileTree.children.map((node) => (
           <FileTreeNode
-            key={node.path}
+            key={`${node.relative_path}/${node.name}`}
             node={node}
             depth={0}
             onCreateFile={onCreateFile}

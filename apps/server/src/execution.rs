@@ -2,7 +2,8 @@ use crate::models::*;
 use hurl::runner::{self, AssertResult, RunnerOptionsBuilder, Value, VariableSet};
 use hurl::util::logger::LoggerOptionsBuilder;
 use hurl_core::error::{DisplaySourceError, OutputFormat};
-use std::collections::HashMap;
+use serde_json::Value as JsonValue;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 pub struct ExecutionHandle {
@@ -277,6 +278,191 @@ pub fn run_entry(
         env,
     });
     Ok(result)
+}
+
+pub fn build_assertions_for_entry(
+    content: &str,
+    entry_index: usize,
+    env: Option<HashMap<String, String>>,
+) -> Result<BuildAssertionsResponse, String> {
+    let result = run_entry_inner(content, entry_index, env)?;
+    let assertions = generate_json_assertions(&result.body);
+    let (updated_content, assertions_added) =
+        inject_assertions_into_entry(content, entry_index, &assertions)?;
+
+    Ok(BuildAssertionsResponse {
+        content: updated_content,
+        assertions_added,
+    })
+}
+
+fn generate_json_assertions(body: &str) -> Vec<String> {
+    let Ok(json) = serde_json::from_str::<JsonValue>(body) else {
+        return Vec::new();
+    };
+
+    let mut assertions = Vec::new();
+    let mut seen = HashSet::new();
+    collect_json_assertions(&json, "$", 0, &mut assertions, &mut seen);
+    assertions
+}
+
+fn collect_json_assertions(
+    value: &JsonValue,
+    path: &str,
+    depth: usize,
+    assertions: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+) {
+    if assertions.len() >= 40 {
+        return;
+    }
+
+    match value {
+        JsonValue::Null => push_unique(assertions, seen, format!("jsonpath \"{}\" == null", path)),
+        JsonValue::Bool(v) => {
+            push_unique(assertions, seen, format!("jsonpath \"{}\" == {}", path, v))
+        }
+        JsonValue::Number(v) => {
+            push_unique(assertions, seen, format!("jsonpath \"{}\" == {}", path, v))
+        }
+        JsonValue::String(v) => push_unique(
+            assertions,
+            seen,
+            format!("jsonpath \"{}\" == \"{}\"", path, escape_hurl_string(v)),
+        ),
+        JsonValue::Array(items) => {
+            push_unique(
+                assertions,
+                seen,
+                format!("jsonpath \"{}\" count == {}", path, items.len()),
+            );
+            push_unique(assertions, seen, format!("jsonpath \"{}\" exists", path));
+            if depth < 2 {
+                if let Some(first) = items.first() {
+                    collect_json_assertions(
+                        first,
+                        &format!("{}[0]", path),
+                        depth + 1,
+                        assertions,
+                        seen,
+                    );
+                }
+            }
+        }
+        JsonValue::Object(map) => {
+            if path != "$" {
+                push_unique(assertions, seen, format!("jsonpath \"{}\" exists", path));
+            }
+            if depth < 2 {
+                for (key, val) in map {
+                    let key_path = append_jsonpath(path, key);
+                    collect_json_assertions(val, &key_path, depth + 1, assertions, seen);
+                    if assertions.len() >= 40 {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn push_unique(assertions: &mut Vec<String>, seen: &mut HashSet<String>, line: String) {
+    if seen.insert(line.clone()) {
+        assertions.push(line);
+    }
+}
+
+fn append_jsonpath(base: &str, key: &str) -> String {
+    if key
+        .chars()
+        .next()
+        .map(|c| c == '_' || c.is_ascii_alphabetic())
+        .unwrap_or(false)
+        && key.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
+    {
+        format!("{}.{}", base, key)
+    } else {
+        format!("{}[\"{}\"]", base, escape_hurl_string(key))
+    }
+}
+
+fn escape_hurl_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn inject_assertions_into_entry(
+    content: &str,
+    entry_index: usize,
+    assertions: &[String],
+) -> Result<(String, usize), String> {
+    if assertions.is_empty() {
+        return Ok((content.to_string(), 0));
+    }
+
+    let mut ordered = parse_hurl_entries(content)?;
+    ordered.sort_by_key(|entry| entry.start_line);
+    let target_pos = ordered
+        .iter()
+        .position(|entry| entry.index == entry_index)
+        .ok_or_else(|| "Entry ordering failure".to_string())?;
+    let target_start_line = ordered[target_pos].start_line;
+
+    let start = target_start_line.saturating_sub(1) as usize;
+    let end_exclusive = if target_pos + 1 < ordered.len() {
+        ordered[target_pos + 1].start_line.saturating_sub(1) as usize
+    } else {
+        content.lines().count()
+    };
+
+    let mut lines = content.lines().map(str::to_string).collect::<Vec<_>>();
+    let block = lines[start..end_exclusive].to_vec();
+    let asserts_header = block
+        .iter()
+        .position(|line| line.trim().eq_ignore_ascii_case("[Asserts]"));
+
+    let added = if let Some(header_idx) = asserts_header {
+        let mut section_end = block.len();
+        for (i, line) in block.iter().enumerate().skip(header_idx + 1) {
+            let trimmed = line.trim();
+            if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                section_end = i;
+                break;
+            }
+        }
+
+        let existing = block[header_idx + 1..section_end]
+            .iter()
+            .map(|line| line.trim().to_string())
+            .filter(|line| !line.is_empty())
+            .collect::<HashSet<_>>();
+        let to_add = assertions
+            .iter()
+            .filter(|line| !existing.contains(line.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let insert_at = start + section_end;
+        lines.splice(insert_at..insert_at, to_add.clone());
+        to_add.len()
+    } else {
+        let http_line = block
+            .iter()
+            .position(|line| line.trim_start().to_uppercase().starts_with("HTTP "))
+            .ok_or_else(|| "Unable to locate HTTP status line for entry".to_string())?;
+
+        let insert_at = start + http_line + 1;
+        let mut to_insert = Vec::with_capacity(assertions.len() + 1);
+        to_insert.push("[Asserts]".to_string());
+        to_insert.extend(assertions.iter().cloned());
+        lines.splice(insert_at..insert_at, to_insert);
+        assertions.len()
+    };
+
+    if added == 0 {
+        return Ok((content.to_string(), 0));
+    }
+
+    Ok((lines.join("\n"), added))
 }
 
 fn run_entry_inner(

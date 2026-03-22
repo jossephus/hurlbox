@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect, type ChangeEvent } from 'react'
 import Editor, { type OnMount } from '@monaco-editor/react'
 import type * as monaco from 'monaco-editor'
-import { TestTube2, FileText, FileCode, Sun, Moon, Loader2, FolderOpen, Folder } from 'lucide-react'
+import { TestTube2, FileText, FileCode, Sun, Moon, Loader2, FolderOpen, Folder, Save } from 'lucide-react'
 import { ResponseViewer } from './components/ResponseViewer'
 import { FileExplorer } from './components/FileExplorer'
 import { registerHurlLanguage } from './lib/hurl-lang'
@@ -38,6 +38,11 @@ interface TestFileResponse {
   passed_assertions: number
   failed_assertions: number
   results: ExecutionResult[]
+}
+
+interface BuildAssertionsResponse {
+  content: string
+  assertions_added: number
 }
 
 type RunMode = 'entry' | 'file' | 'test'
@@ -92,6 +97,7 @@ function parseEnvInput(input: string): Record<string, string> {
   return env
 }
 
+
 function App() {
   const [content, setContent] = useState(SAMPLE_HURL)
   const [response, setResponse] = useState<string>('')
@@ -110,13 +116,15 @@ function App() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
   const [currentEntry, setCurrentEntry] = useState(0)
   const [rootPath, setRootPath] = useState('.')
-  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
+  const [selectedRelativePath, setSelectedRelativePath] = useState<string | null>(null)
   const [currentFileName, setCurrentFileName] = useState('editor.hurl')
   const [showExplorer, setShowExplorer] = useState(true)
   const [fileTreeRefreshKey, setFileTreeRefreshKey] = useState(0)
   const [envInput, setEnvInput] = useState('')
   const [envFileName, setEnvFileName] = useState<string | null>(null)
   const [serverEnvFileName, setServerEnvFileName] = useState<string | null>(null)
+  const [lastRunEntryIndex, setLastRunEntryIndex] = useState<number | null>(null)
+  const [lastRunResult, setLastRunResult] = useState<ExecutionResult | null>(null)
   const monacoRef = useRef<typeof monaco | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const entriesRef = useRef<EntryInfo[]>([])
@@ -149,19 +157,49 @@ function App() {
     })
   }, [])
 
-  const handleFileSelect = useCallback((path: string, fileContent: string) => {
-    setSelectedFilePath(path)
-    setCurrentFileName(path.split('/').pop() || path)
+  const handleFileSelect = useCallback((relativePath: string, fileContent: string, options?: { skipHistory?: boolean }) => {
+    setSelectedRelativePath(relativePath)
+    setCurrentFileName(relativePath.split('/').pop() || relativePath)
     setContent(fileContent)
+    if (!options?.skipHistory) {
+      const url = new URL(window.location.href)
+      url.searchParams.set('path', relativePath)
+      window.history.pushState({ path: relativePath }, '', url.toString())
+    }
   }, [])
 
-  const handleCreateFile = useCallback(async (directoryPath: string) => {
+  useEffect(() => {
+    const loadFileFromUrl = async (relativePath: string) => {
+      try {
+        const res = await fetch(`/api/file?path=${encodeURIComponent(relativePath)}`)
+        if (!res.ok) return
+        const data = await res.json()
+        handleFileSelect(relativePath, data.content, { skipHistory: true })
+      } catch {
+        // ignore
+      }
+    }
+
+    const applyFromUrl = () => {
+      const url = new URL(window.location.href)
+      const relativePath = url.searchParams.get('path')
+      if (relativePath) {
+        loadFileFromUrl(relativePath)
+      }
+    }
+
+    applyFromUrl()
+    window.addEventListener('popstate', applyFromUrl)
+    return () => window.removeEventListener('popstate', applyFromUrl)
+  }, [handleFileSelect])
+
+  const handleCreateFile = useCallback(async (directoryRelativePath: string) => {
     const fileName = window.prompt('New file name', 'new-request.hurl')?.trim()
     if (!fileName) return
 
     const nextFileName = fileName.endsWith('.hurl') ? fileName : `${fileName}.hurl`
-    const baseDir = directoryPath.replace(/\/$/, '')
-    const targetPath = `${baseDir}/${nextFileName}`
+    const relativeBase = directoryRelativePath.replace(/\/$/, '')
+    const relativePath = `${relativeBase}/${nextFileName}`
 
     const initialContent = 'GET https://jsonplaceholder.typicode.com/todos/1\nHTTP 200\n'
 
@@ -169,7 +207,7 @@ function App() {
       const res = await fetch('/api/file', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: targetPath, content: initialContent }),
+        body: JSON.stringify({ path: relativePath, content: initialContent }),
       })
 
       if (!res.ok) {
@@ -178,15 +216,12 @@ function App() {
         return
       }
 
-      const data = await res.json()
-      setSelectedFilePath(data.path)
-      setCurrentFileName(nextFileName)
-      setContent(initialContent)
+      handleFileSelect(relativePath, initialContent)
       setFileTreeRefreshKey((prev) => prev + 1)
     } catch {
       window.alert('Failed to create file')
     }
-  }, [])
+  }, [handleFileSelect])
 
   const handleEnvFileSelected = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -251,6 +286,15 @@ function App() {
       if (firstResult) {
         setResponseAssertions(firstResult.assertions || [])
         setResponseTiming(firstResult.timing || null)
+        setLastRunResult(firstResult)
+      } else {
+        setLastRunResult(null)
+      }
+
+      if (mode === 'entry' && entryIndex !== undefined) {
+        setLastRunEntryIndex(entryIndex)
+      } else {
+        setLastRunEntryIndex(null)
       }
     } catch (error) {
       setResponse(`✗ Error: ${error}`)
@@ -335,6 +379,61 @@ function App() {
       runRequestRef.current?.('entry', currentEntry)
     })
   }
+
+  const handleBuildAssertions = useCallback(async () => {
+    if (lastRunEntryIndex == null || !lastRunResult) {
+      window.alert('Run an entry first to build assertions')
+      return
+    }
+
+    try {
+      const env = parseEnvInput(envInput)
+      const res = await fetch('/api/build-assertions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, entry_index: lastRunEntryIndex, env }),
+      })
+
+      const data = await res.json()
+      if (!res.ok) {
+        window.alert(data.error || 'Failed to build assertions')
+        return
+      }
+
+      const payload = data as BuildAssertionsResponse
+      if (payload.content === content || payload.assertions_added === 0) {
+        window.alert('No new assertions to add for this entry')
+        return
+      }
+
+      setContent(payload.content)
+      window.alert(`Added ${payload.assertions_added} generated assertion(s) to entry ${lastRunEntryIndex + 1}`)
+    } catch {
+      window.alert('Failed to build assertions')
+    }
+  }, [content, envInput, lastRunEntryIndex, lastRunResult])
+
+  const handleSaveFile = useCallback(async () => {
+    if (!selectedRelativePath) {
+      window.alert('Select a file from explorer first')
+      return
+    }
+    try {
+      const res = await fetch('/api/file', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: selectedRelativePath, content }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        window.alert(data.error || 'Failed to save file')
+        return
+      }
+      setContent(data.content || content)
+    } catch {
+      window.alert('Failed to save file')
+    }
+  }, [content, selectedRelativePath])
 
   return (
     <div 
@@ -511,7 +610,7 @@ function App() {
               refreshKey={fileTreeRefreshKey}
               onCreateFile={handleCreateFile}
               onFileSelect={handleFileSelect}
-              selectedPath={selectedFilePath}
+              selectedPath={selectedRelativePath}
             />
           </div>
         </div>
@@ -519,22 +618,39 @@ function App() {
         {/* Editor Area */}
         <div className="flex-1 flex flex-col min-w-0">
           <div 
-            className="h-8 px-3 flex items-center shrink-0"
+            className="h-8 px-3 flex items-center justify-between shrink-0"
             style={{ 
               background: 'var(--bg-primary)',
               borderBottom: '1px solid var(--border-dim)',
             }}
           >
-            <FileText className="w-3.5 h-3.5 mr-2" style={{ color: 'var(--text-muted)' }} />
-            <span 
-              className="text-xs"
-              style={{ 
+            <div className="flex items-center min-w-0">
+              <FileText className="w-3.5 h-3.5 mr-2 shrink-0" style={{ color: 'var(--text-muted)' }} />
+              <span 
+                className="text-xs truncate"
+                style={{ 
+                  fontFamily: 'var(--font-mono)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                {currentFileName}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleSaveFile}
+              className="px-2 py-1 text-[10px] rounded transition-colors flex items-center gap-1"
+              style={{
                 fontFamily: 'var(--font-mono)',
-                color: 'var(--text-secondary)',
+                color: 'var(--text-primary)',
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--border-dim)',
               }}
+              title="Save file"
             >
-              {currentFileName}
-            </span>
+              <Save className="w-3 h-3" />
+              Save
+            </button>
           </div>
           <div className="flex-1 min-h-0">
             <Editor
@@ -565,7 +681,7 @@ function App() {
         </div>
 
         <div 
-          className="app-response-panel w-[450px] flex flex-col min-w-0"
+          className="app-response-panel w-[450px] flex flex-col min-w-0 relative"
           style={{ 
             borderLeft: '1px solid var(--border-default)',
             background: 'var(--bg-secondary)',
@@ -626,8 +742,8 @@ function App() {
               <div className="text-xs" style={{ fontFamily: 'var(--font-mono)' }}>
                 {responseAssertions.length > 0 ? (
                   <div className="space-y-2">
-                    {responseAssertions.map((assertion, idx) => (
-                      <div key={idx} className="flex items-center gap-2 p-2 rounded" style={{ background: 'var(--bg-elevated)' }}>
+                    {responseAssertions.map((assertion) => (
+                      <div key={assertion.query} className="flex items-center gap-2 p-2 rounded" style={{ background: 'var(--bg-elevated)' }}>
                         <span className={assertion.passed ? 'text-green-400' : 'text-red-400'}>
                           {assertion.passed ? '✓' : '✗'}
                         </span>
@@ -693,6 +809,29 @@ function App() {
               </div>
             )}
           </div>
+          {response.trim() !== '' && (
+            <button
+              type="button"
+              onClick={handleBuildAssertions}
+              className="px-3 py-2 rounded text-xs transition-colors"
+              style={{
+                position: 'absolute',
+                right: '12px',
+                bottom: '12px',
+                zIndex: 10,
+                fontFamily: 'var(--font-mono)',
+                color: 'var(--text-primary)',
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--border-dim)',
+                boxShadow: '0 6px 18px rgba(0,0,0,0.18)',
+                opacity: lastRunEntryIndex != null && !!lastRunResult ? 1 : 0.6,
+                cursor: lastRunEntryIndex != null && !!lastRunResult ? 'pointer' : 'not-allowed',
+              }}
+              disabled={lastRunEntryIndex == null || !lastRunResult}
+            >
+              Build Assertions
+            </button>
+          )}
         </div>
       </main>
 

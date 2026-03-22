@@ -145,6 +145,22 @@ pub fn test_file_route() -> impl Filter<Extract = impl Reply, Error = Rejection>
         })
 }
 
+pub fn build_assertions_route() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::post()
+        .and(warp::path("build-assertions"))
+        .and(warp::body::json())
+        .map(|request: BuildAssertionsRequest| {
+            match execution::build_assertions_for_entry(
+                &request.content,
+                request.entry_index,
+                merged_env(request.env),
+            ) {
+                Ok(result) => ok_json(&result).into_response(),
+                Err(error) => err_json(StatusCode::BAD_REQUEST, error).into_response(),
+            }
+        })
+}
+
 pub fn rerun_last_route() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::post()
         .and(warp::path("rerun-last"))
@@ -203,6 +219,22 @@ pub fn create_file_route() -> impl Filter<Extract = impl Reply, Error = Rejectio
                 Ok(path) => ok_json(&CreateFileResponse {
                     success: true,
                     path,
+                })
+                .into_response(),
+                Err(error) => err_json(StatusCode::BAD_REQUEST, error).into_response(),
+            }
+        })
+}
+
+pub fn update_file_route() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::put()
+        .and(warp::path("file"))
+        .and(warp::body::json())
+        .map(|request: UpdateFileRequest| {
+            match filescanner::write_file(&request.path, &request.content) {
+                Ok(content) => ok_json(&FileContentResponse {
+                    content,
+                    path: request.path,
                 })
                 .into_response(),
                 Err(error) => err_json(StatusCode::BAD_REQUEST, error).into_response(),

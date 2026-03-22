@@ -90,11 +90,13 @@ async fn main() {
                 .or(api::run_selection_route())
                 .or(api::run_file_route())
                 .or(api::test_file_route())
+                .or(api::build_assertions_route())
                 .or(api::rerun_last_route())
                 .or(api::cancel_route())
                 .or(api::files_route())
                 .or(api::read_file_route())
                 .or(api::create_file_route())
+                .or(api::update_file_route())
                 .or(api::env_default_route())
         );
 

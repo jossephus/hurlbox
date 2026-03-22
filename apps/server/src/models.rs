@@ -47,6 +47,13 @@ pub struct RunFileRequest {
 }
 
 #[derive(Deserialize)]
+pub struct BuildAssertionsRequest {
+    pub content: String,
+    pub entry_index: usize,
+    pub env: Option<std::collections::HashMap<String, String>>,
+}
+
+#[derive(Deserialize)]
 pub struct CancelRequest {
     pub run_id: String,
 }
@@ -109,6 +116,12 @@ pub struct TestFileResponse {
 }
 
 #[derive(Serialize)]
+pub struct BuildAssertionsResponse {
+    pub content: String,
+    pub assertions_added: usize,
+}
+
+#[derive(Serialize)]
 pub struct ErrorResponse {
     pub error: String,
 }
@@ -134,6 +147,12 @@ pub struct FileReadQuery {
 pub struct CreateFileRequest {
     pub path: String,
     pub content: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateFileRequest {
+    pub path: String,
+    pub content: String,
 }
 
 #[derive(Serialize)]
