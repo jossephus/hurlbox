@@ -239,3 +239,24 @@ pre {
     border-top: 1px solid var(--border-default);
   }
 }
+
+[cmdk-overlay] {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+[cmdk-dialog] {
+  position: fixed;
+  top: 14%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(680px, 92vw);
+  z-index: 51;
+}
+
+[cmdk-item][data-selected='true'] {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}

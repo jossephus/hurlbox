@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, type ChangeEvent } from 'reac
 import Editor, { type OnMount } from '@monaco-editor/react'
 import type * as monaco from 'monaco-editor'
 import { TestTube2, FileText, FileCode, Sun, Moon, Loader2, FolderOpen, Folder, Save, Key } from 'lucide-react'
+import { Command } from 'cmdk'
 import { ResponseViewer } from './components/ResponseViewer'
 import { FileExplorer } from './components/FileExplorer'
 import { registerHurlLanguage } from './lib/hurl-lang'
@@ -58,6 +59,23 @@ interface EditorTab {
   isDirty: boolean
 }
 
+interface FileTreeNode {
+  name: string
+  relative_path: string
+  type: 'file' | 'folder'
+  children?: FileTreeNode[]
+}
+
+interface EndpointSearchItem {
+  id: string
+  filePath: string
+  fileName: string
+  entryIndex: number
+  startLine: number
+  method: string
+  url: string
+}
+
 type RunMode = 'entry' | 'file' | 'test'
 
 const SAMPLE_HURL = `GET https://jsonplaceholder.typicode.com/todos/
@@ -110,6 +128,12 @@ function parseEnvInput(input: string): Record<string, string> {
   return env
 }
 
+function collectHurlFiles(node: FileTreeNode): string[] {
+  if (node.type === 'file') return [node.relative_path]
+  const children = node.children || []
+  return children.flatMap(collectHurlFiles)
+}
+
 
 function App() {
   const [content, setContent] = useState(SAMPLE_HURL)
@@ -132,11 +156,16 @@ function App() {
   const [serverEnvFileName, setServerEnvFileName] = useState<string | null>(null)
   const [lastRunEntryIndex, setLastRunEntryIndex] = useState<number | null>(null)
   const [lastRunResult, setLastRunResult] = useState<ExecutionResult | null>(null)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [endpointSearchItems, setEndpointSearchItems] = useState<EndpointSearchItem[]>([])
+  const [endpointSearchLoading, setEndpointSearchLoading] = useState(false)
+  const [endpointSearchError, setEndpointSearchError] = useState<string | null>(null)
   const monacoRef = useRef<typeof monaco | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const entriesRef = useRef<EntryInfo[]>([])
   const runRequestRef = useRef<((mode: RunMode, entryIndex?: number) => Promise<void>) | null>(null)
   const envFileInputRef = useRef<HTMLInputElement | null>(null)
+  const paletteInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => { entriesRef.current = entries }, [entries])
 
@@ -441,6 +470,10 @@ function App() {
     editor.addCommand(monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyS, () => {
       handleSaveFile()
     })
+
+    editor.addCommand(monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyK, () => {
+      setPaletteOpen(true)
+    })
   }
 
   const handleBuildAssertions = useCallback(async () => {
@@ -516,6 +549,115 @@ function App() {
     }))
   }, [activeEditorTabPath])
 
+  const jumpToEntry = useCallback(async (entry: EndpointSearchItem) => {
+    if (selectedRelativePath !== entry.filePath) {
+      const res = await fetch(`/api/file?path=${encodeURIComponent(entry.filePath)}`)
+      if (res.ok) {
+        const data = await res.json()
+        handleFileSelect(entry.filePath, data.content)
+      }
+    }
+
+    setCurrentEntry(entry.entryIndex)
+    setPaletteOpen(false)
+
+    window.setTimeout(() => {
+      editorRef.current?.focus()
+      editorRef.current?.revealLineInCenter(entry.startLine)
+      editorRef.current?.setPosition({ lineNumber: entry.startLine, column: 1 })
+    }, 0)
+  }, [handleFileSelect, selectedRelativePath])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setPaletteOpen(true)
+        return
+      }
+      if (event.key === 'Escape') {
+        setPaletteOpen(false)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  useEffect(() => {
+    if (!paletteOpen) return
+    const raf = window.requestAnimationFrame(() => {
+      const active = document.activeElement as HTMLElement | null
+      active?.blur()
+      paletteInputRef.current?.focus()
+      paletteInputRef.current?.select()
+    })
+    return () => window.cancelAnimationFrame(raf)
+  }, [paletteOpen])
+
+  useEffect(() => {
+    if (!paletteOpen) return
+    void fileTreeRefreshKey
+
+    let cancelled = false
+
+    const loadEndpointIndex = async () => {
+      setEndpointSearchLoading(true)
+      setEndpointSearchError(null)
+      try {
+        const filesRes = await fetch(`/api/files?path=${encodeURIComponent(rootPath)}`)
+        if (!filesRes.ok) {
+          const err = await filesRes.json()
+          throw new Error(err.error || 'Failed to load files')
+        }
+
+        const fileTree = (await filesRes.json()) as FileTreeNode
+        const filePaths = collectHurlFiles(fileTree)
+
+        const perFile = await Promise.all(filePaths.map(async (filePath) => {
+          const readRes = await fetch(`/api/file?path=${encodeURIComponent(filePath)}`)
+          if (!readRes.ok) return [] as EndpointSearchItem[]
+          const fileData = await readRes.json()
+
+          const parseRes = await fetch('/api/parse', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: fileData.content }),
+          })
+          if (!parseRes.ok) return [] as EndpointSearchItem[]
+
+          const parsed = await parseRes.json()
+          const parsedEntries = (parsed.entries || []) as EntryInfo[]
+          const fileName = filePath.split('/').pop() || filePath
+          return parsedEntries.map((entry) => ({
+            id: `${filePath}:${entry.index}`,
+            filePath,
+            fileName,
+            entryIndex: entry.index,
+            startLine: entry.start_line,
+            method: entry.method,
+            url: entry.url,
+          }))
+        }))
+
+        if (!cancelled) {
+          setEndpointSearchItems(perFile.flat())
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setEndpointSearchError(error instanceof Error ? error.message : 'Failed to build search index')
+          setEndpointSearchItems([])
+        }
+      } finally {
+        if (!cancelled) setEndpointSearchLoading(false)
+      }
+    }
+
+    void loadEndpointIndex()
+    return () => {
+      cancelled = true
+    }
+  }, [paletteOpen, rootPath, fileTreeRefreshKey])
+
   return (
     <div 
       className="h-screen flex flex-col overflow-hidden"
@@ -563,6 +705,22 @@ function App() {
         </div>
 
         <div className="app-header-actions flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setPaletteOpen(true)}
+            className="px-2.5 py-1.5 text-xs rounded transition-colors flex items-center gap-2"
+            style={{
+              color: 'var(--text-secondary)',
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--border-default)',
+              fontFamily: 'var(--font-mono)',
+            }}
+            title="Search endpoints and commands"
+          >
+            Search
+            <span style={{ color: 'var(--text-muted)' }}>Cmd+K</span>
+          </button>
+
           <button
             type="button"
             onClick={() => setShowExplorer((prev) => !prev)}
@@ -926,6 +1084,93 @@ function App() {
         </div>
       </main>
 
+      <Command.Dialog
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+      >
+          <Command
+            className="h-full w-full overflow-hidden rounded-md border"
+            style={{
+              background: 'var(--bg-secondary)',
+              borderColor: 'var(--border-default)',
+              boxShadow: '0 20px 50px rgba(0, 0, 0, 0.35)',
+              fontFamily: 'var(--font-mono)',
+            }}
+            loop
+          >
+            <Command.Input
+              ref={paletteInputRef}
+              autoFocus
+              placeholder="Search endpoints, files, or commands..."
+              className="w-full border-b px-3 py-2 text-sm outline-none"
+              style={{
+                background: 'var(--bg-primary)',
+                borderColor: 'var(--border-dim)',
+                color: 'var(--text-primary)',
+              }}
+            />
+            <Command.List className="max-h-[55vh] overflow-y-auto p-1 text-xs">
+              <Command.Empty className="px-2 py-2" style={{ color: 'var(--text-muted)' }}>
+                No matches.
+              </Command.Empty>
+
+              <Command.Group heading="Actions" className="px-1 py-1" style={{ color: 'var(--text-secondary)' }}>
+                <Command.Item className="px-2 py-1.5 rounded cursor-pointer" onSelect={() => { setPaletteOpen(false); void runRequest('file') }}>
+                  Run file
+                </Command.Item>
+                <Command.Item className="px-2 py-1.5 rounded cursor-pointer" onSelect={() => { setPaletteOpen(false); void runRequest('test') }}>
+                  Run tests
+                </Command.Item>
+                <Command.Item className="px-2 py-1.5 rounded cursor-pointer" onSelect={() => { setPaletteOpen(false); if (currentEntry >= 0) { void runRequest('entry', currentEntry) } }}>
+                  Run current entry
+                </Command.Item>
+                <Command.Item className="px-2 py-1.5 rounded cursor-pointer" onSelect={() => { setPaletteOpen(false); void handleSaveFile() }}>
+                  Save current file
+                </Command.Item>
+                <Command.Item className="px-2 py-1.5 rounded cursor-pointer" onSelect={() => { setPaletteOpen(false); toggleTheme() }}>
+                  Toggle theme
+                </Command.Item>
+                <Command.Item className="px-2 py-1.5 rounded cursor-pointer" onSelect={() => { setPaletteOpen(false); setShowExplorer((prev) => !prev) }}>
+                  Toggle explorer
+                </Command.Item>
+              </Command.Group>
+
+              {editorTabs.length > 0 && (
+                <Command.Group heading="Open files" className="px-1 py-1" style={{ color: 'var(--text-secondary)' }}>
+                  {editorTabs.map((tab) => (
+                    <Command.Item key={tab.path} className="px-2 py-1.5 rounded cursor-pointer" onSelect={() => { setPaletteOpen(false); activateEditorTab(tab.path) }}>
+                      {tab.name}{tab.isDirty ? ' *' : ''} - {tab.path}
+                    </Command.Item>
+                  ))}
+                </Command.Group>
+              )}
+
+              <Command.Group heading="Endpoints" className="px-1 py-1" style={{ color: 'var(--text-secondary)' }}>
+                {endpointSearchLoading && (
+                  <Command.Item disabled className="px-2 py-1.5 rounded" value="loading-endpoints">
+                    Indexing endpoints...
+                  </Command.Item>
+                )}
+                {endpointSearchError && (
+                  <Command.Item disabled className="px-2 py-1.5 rounded" value="endpoint-error">
+                    {endpointSearchError}
+                  </Command.Item>
+                )}
+                {!endpointSearchLoading && !endpointSearchError && endpointSearchItems.map((entry) => (
+                  <Command.Item
+                    key={entry.id}
+                    value={`${entry.method} ${entry.url} ${entry.filePath} entry ${entry.entryIndex + 1}`}
+                    className="px-2 py-1.5 rounded cursor-pointer"
+                    onSelect={() => { void jumpToEntry(entry) }}
+                  >
+                    {entry.method} {entry.url} ({entry.fileName}: Entry {entry.entryIndex + 1})
+                  </Command.Item>
+                ))}
+              </Command.Group>
+            </Command.List>
+          </Command>
+      </Command.Dialog>
+
       <footer 
         className="shrink-0 h-6 px-3 flex items-center justify-between text-[10px]"
         style={{ 
@@ -938,6 +1183,23 @@ function App() {
         <span>{isLoading ? 'running...' : ''}</span>
         <span>hurlbox</span>
       </footer>
+
+      {endpointSearchLoading && (
+        <div
+          className="fixed bottom-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded text-[11px] flex items-center gap-2 pointer-events-none"
+          style={{
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border-default)',
+            color: 'var(--text-secondary)',
+            fontFamily: 'var(--font-mono)',
+            zIndex: 60,
+            boxShadow: '0 8px 20px rgba(0,0,0,0.25)',
+          }}
+        >
+          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          Scanning endpoints...
+        </div>
+      )}
     </div>
   )
 }
