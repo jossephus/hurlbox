@@ -128,6 +128,12 @@ function parseEnvInput(input: string): Record<string, string> {
   return env
 }
 
+function serializeEnvInput(env: Record<string, string>): string {
+  return Object.entries(env)
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n')
+}
+
 function collectHurlFiles(node: FileTreeNode): string[] {
   if (node.type === 'file') return [node.relative_path]
   const children = node.children || []
@@ -154,18 +160,32 @@ function App() {
   const [envInput, setEnvInput] = useState('')
   const [envFileName, setEnvFileName] = useState<string | null>(null)
   const [serverEnvFileName, setServerEnvFileName] = useState<string | null>(null)
+  const [serverDefaultEnvKeys, setServerDefaultEnvKeys] = useState<string[]>([])
   const [lastRunEntryIndex, setLastRunEntryIndex] = useState<number | null>(null)
   const [lastRunResult, setLastRunResult] = useState<ExecutionResult | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [endpointSearchItems, setEndpointSearchItems] = useState<EndpointSearchItem[]>([])
   const [endpointSearchLoading, setEndpointSearchLoading] = useState(false)
   const [endpointSearchError, setEndpointSearchError] = useState<string | null>(null)
+  const [envListExpanded, setEnvListExpanded] = useState(false)
+  const [responsePanelWidth, setResponsePanelWidth] = useState(450)
+  const [createFileModalOpen, setCreateFileModalOpen] = useState(false)
+  const [createFileDirectory, setCreateFileDirectory] = useState('.')
+  const [createFileNameInput, setCreateFileNameInput] = useState('new-request.hurl')
+  const [envOverrideModalOpen, setEnvOverrideModalOpen] = useState(false)
+  const [envModalMode, setEnvModalMode] = useState<'create' | 'update'>('update')
+  const [envModalKeyInput, setEnvModalKeyInput] = useState('')
+  const [envModalValueInput, setEnvModalValueInput] = useState('')
   const monacoRef = useRef<typeof monaco | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const entriesRef = useRef<EntryInfo[]>([])
   const runRequestRef = useRef<((mode: RunMode, entryIndex?: number) => Promise<void>) | null>(null)
   const envFileInputRef = useRef<HTMLInputElement | null>(null)
   const paletteInputRef = useRef<HTMLInputElement | null>(null)
+  const isResizingResponseRef = useRef(false)
+  const createFileInputRef = useRef<HTMLInputElement | null>(null)
+  const envKeyInputRef = useRef<HTMLInputElement | null>(null)
+  const envValueInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => { entriesRef.current = entries }, [entries])
 
@@ -180,6 +200,15 @@ function App() {
         }
       } catch {
         // ignore env metadata failures
+      }
+
+      try {
+        const res = await fetch('/api/env-default-vars')
+        if (!res.ok) return
+        const data = await res.json()
+        setServerDefaultEnvKeys(Array.isArray(data.keys) ? data.keys : [])
+      } catch {
+        // ignore env vars metadata failures
       }
     }
     loadServerEnv()
@@ -290,12 +319,18 @@ function App() {
     return () => window.removeEventListener('popstate', applyFromUrl)
   }, [handleFileSelect])
 
-  const handleCreateFile = useCallback(async (directoryRelativePath: string) => {
-    const fileName = window.prompt('New file name', 'new-request.hurl')?.trim()
+  const handleCreateFile = useCallback((directoryRelativePath: string) => {
+    setCreateFileDirectory(directoryRelativePath)
+    setCreateFileNameInput('new-request.hurl')
+    setCreateFileModalOpen(true)
+  }, [])
+
+  const submitCreateFile = useCallback(async () => {
+    const fileName = createFileNameInput.trim()
     if (!fileName) return
 
     const nextFileName = fileName.endsWith('.hurl') ? fileName : `${fileName}.hurl`
-    const relativeBase = directoryRelativePath.replace(/\/$/, '')
+    const relativeBase = createFileDirectory.replace(/\/$/, '')
     const relativePath = `${relativeBase}/${nextFileName}`
 
     const initialContent = 'GET https://jsonplaceholder.typicode.com/todos/1\nHTTP 200\n'
@@ -315,10 +350,11 @@ function App() {
 
       handleFileSelect(relativePath, initialContent)
       setFileTreeRefreshKey((prev) => prev + 1)
+      setCreateFileModalOpen(false)
     } catch {
       window.alert('Failed to create file')
     }
-  }, [handleFileSelect])
+  }, [createFileDirectory, createFileNameInput, handleFileSelect])
 
   const handleEnvFileSelected = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -595,6 +631,33 @@ function App() {
   }, [paletteOpen])
 
   useEffect(() => {
+    if (paletteOpen) setEnvListExpanded(false)
+  }, [paletteOpen])
+
+  useEffect(() => {
+    if (!createFileModalOpen) return
+    const raf = window.requestAnimationFrame(() => {
+      createFileInputRef.current?.focus()
+      createFileInputRef.current?.select()
+    })
+    return () => window.cancelAnimationFrame(raf)
+  }, [createFileModalOpen])
+
+  useEffect(() => {
+    if (!envOverrideModalOpen) return
+    const raf = window.requestAnimationFrame(() => {
+      if (envModalMode === 'create') {
+        envKeyInputRef.current?.focus()
+        envKeyInputRef.current?.select()
+      } else {
+        envValueInputRef.current?.focus()
+        envValueInputRef.current?.select()
+      }
+    })
+    return () => window.cancelAnimationFrame(raf)
+  }, [envModalMode, envOverrideModalOpen])
+
+  useEffect(() => {
     if (!paletteOpen) return
     void fileTreeRefreshKey
 
@@ -657,6 +720,63 @@ function App() {
       cancelled = true
     }
   }, [paletteOpen, rootPath, fileTreeRefreshKey])
+
+  useEffect(() => {
+    const onMouseMove = (event: MouseEvent) => {
+      if (!isResizingResponseRef.current) return
+      const minWidth = 320
+      const maxWidth = Math.min(900, window.innerWidth - 320)
+      const nextWidth = window.innerWidth - event.clientX
+      setResponsePanelWidth(Math.max(minWidth, Math.min(maxWidth, nextWidth)))
+    }
+
+    const onMouseUp = () => {
+      if (!isResizingResponseRef.current) return
+      isResizingResponseRef.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [])
+
+  const openEnvUpdateModal = useCallback((key: string) => {
+    const env = parseEnvInput(envInput)
+    setEnvModalMode('update')
+    setEnvModalKeyInput(key)
+    setEnvModalValueInput(env[key] ?? '')
+    setEnvOverrideModalOpen(true)
+  }, [envInput])
+
+  const openEnvCreateModal = useCallback(() => {
+    setEnvModalMode('create')
+    setEnvModalKeyInput('')
+    setEnvModalValueInput('')
+    setEnvOverrideModalOpen(true)
+  }, [])
+
+  const submitEnvModal = useCallback(() => {
+    const key = envModalKeyInput.trim()
+    if (!key) {
+      window.alert('Missing KEY')
+      return
+    }
+    const env = parseEnvInput(envInput)
+    env[key] = envModalValueInput
+    setEnvInput(serializeEnvInput(env))
+    setEnvOverrideModalOpen(false)
+  }, [envInput, envModalKeyInput, envModalValueInput])
+
+  const envOverrideKeys = Array.from(new Set([
+    ...Object.keys(parseEnvInput(envInput)),
+    ...serverDefaultEnvKeys,
+  ])).sort((a, b) => a.localeCompare(b))
+  const visibleEnvKeys = envListExpanded ? envOverrideKeys : envOverrideKeys.slice(0, 5)
 
   return (
     <div 
@@ -954,9 +1074,21 @@ function App() {
           </div>
         </div>
 
+        <div
+          className="app-response-resizer"
+          onMouseDown={(event) => {
+            event.preventDefault()
+            isResizingResponseRef.current = true
+            document.body.style.cursor = 'col-resize'
+            document.body.style.userSelect = 'none'
+          }}
+          aria-hidden="true"
+        />
+
         <div 
-          className="app-response-panel w-[450px] flex flex-col min-w-0 relative"
+          className="app-response-panel flex flex-col min-w-0 relative"
           style={{ 
+            width: `${responsePanelWidth}px`,
             borderLeft: '1px solid var(--border-default)',
             background: 'var(--bg-secondary)',
           }}
@@ -1114,36 +1246,35 @@ function App() {
                 No matches.
               </Command.Empty>
 
-              <Command.Group heading="Actions" className="px-1 py-1" style={{ color: 'var(--text-secondary)' }}>
-                <Command.Item className="px-2 py-1.5 rounded cursor-pointer" onSelect={() => { setPaletteOpen(false); void runRequest('file') }}>
-                  Run file
+              <Command.Group heading="Session env" className="px-1 py-1" style={{ color: 'var(--text-secondary)' }}>
+                {envOverrideKeys.length === 0 && (
+                  <Command.Item disabled className="px-2 py-1.5 rounded" value="no-session-env">
+                    No session env overrides
+                  </Command.Item>
+                )}
+                {visibleEnvKeys.map((key) => (
+                  <Command.Item
+                    key={`env-key-${key}`}
+                    value={`env ${key}`}
+                    className="px-2 py-1.5 rounded cursor-pointer"
+                    onSelect={() => { setPaletteOpen(false); openEnvUpdateModal(key) }}
+                  >
+                    {key}
+                  </Command.Item>
+                ))}
+                <Command.Item className="px-2 py-1.5 rounded cursor-pointer" onSelect={() => { setPaletteOpen(false); openEnvCreateModal() }}>
+                  New key...
                 </Command.Item>
-                <Command.Item className="px-2 py-1.5 rounded cursor-pointer" onSelect={() => { setPaletteOpen(false); void runRequest('test') }}>
-                  Run tests
-                </Command.Item>
-                <Command.Item className="px-2 py-1.5 rounded cursor-pointer" onSelect={() => { setPaletteOpen(false); if (currentEntry >= 0) { void runRequest('entry', currentEntry) } }}>
-                  Run current entry
-                </Command.Item>
-                <Command.Item className="px-2 py-1.5 rounded cursor-pointer" onSelect={() => { setPaletteOpen(false); void handleSaveFile() }}>
-                  Save current file
-                </Command.Item>
-                <Command.Item className="px-2 py-1.5 rounded cursor-pointer" onSelect={() => { setPaletteOpen(false); toggleTheme() }}>
-                  Toggle theme
-                </Command.Item>
-                <Command.Item className="px-2 py-1.5 rounded cursor-pointer" onSelect={() => { setPaletteOpen(false); setShowExplorer((prev) => !prev) }}>
-                  Toggle explorer
-                </Command.Item>
+                {envOverrideKeys.length > 5 && (
+                  <Command.Item
+                    className="px-2 py-1.5 rounded cursor-pointer"
+                    onSelect={() => setEnvListExpanded((prev) => !prev)}
+                    value={envListExpanded ? 'collapse session env list' : 'expand session env list'}
+                  >
+                    {envListExpanded ? 'Show less' : `Show ${envOverrideKeys.length - 5} more...`}
+                  </Command.Item>
+                )}
               </Command.Group>
-
-              {editorTabs.length > 0 && (
-                <Command.Group heading="Open files" className="px-1 py-1" style={{ color: 'var(--text-secondary)' }}>
-                  {editorTabs.map((tab) => (
-                    <Command.Item key={tab.path} className="px-2 py-1.5 rounded cursor-pointer" onSelect={() => { setPaletteOpen(false); activateEditorTab(tab.path) }}>
-                      {tab.name}{tab.isDirty ? ' *' : ''} - {tab.path}
-                    </Command.Item>
-                  ))}
-                </Command.Group>
-              )}
 
               <Command.Group heading="Endpoints" className="px-1 py-1" style={{ color: 'var(--text-secondary)' }}>
                 {endpointSearchLoading && (
@@ -1170,6 +1301,67 @@ function App() {
             </Command.List>
           </Command>
       </Command.Dialog>
+
+      {createFileModalOpen && (
+        <div className="app-modal-overlay">
+          <button type="button" className="app-modal-dismiss" aria-label="Close create file modal" onClick={() => setCreateFileModalOpen(false)} />
+          <div className="app-modal">
+            <div className="app-modal-title">Create File</div>
+            <div className="app-modal-subtitle">Directory: {createFileDirectory}</div>
+            <input
+              ref={createFileInputRef}
+              type="text"
+              value={createFileNameInput}
+              onChange={(event) => setCreateFileNameInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void submitCreateFile()
+                if (event.key === 'Escape') setCreateFileModalOpen(false)
+              }}
+              className="app-modal-input"
+              placeholder="new-request.hurl"
+            />
+            <div className="app-modal-actions">
+              <button type="button" className="app-modal-btn" onClick={() => setCreateFileModalOpen(false)}>Cancel</button>
+              <button type="button" className="app-modal-btn primary" onClick={() => { void submitCreateFile() }}>Create</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {envOverrideModalOpen && (
+        <div className="app-modal-overlay">
+          <button type="button" className="app-modal-dismiss" aria-label="Close env override modal" onClick={() => setEnvOverrideModalOpen(false)} />
+          <div className="app-modal">
+            <div className="app-modal-title">Session Env Override</div>
+            <div className="app-modal-subtitle">Applies only to this browser session</div>
+            <input
+              ref={envKeyInputRef}
+              type="text"
+              value={envModalKeyInput}
+              onChange={(event) => setEnvModalKeyInput(event.target.value)}
+              className="app-modal-input"
+              placeholder="KEY"
+              disabled={envModalMode === 'update'}
+            />
+            <input
+              ref={envValueInputRef}
+              type="text"
+              value={envModalValueInput}
+              onChange={(event) => setEnvModalValueInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') submitEnvModal()
+                if (event.key === 'Escape') setEnvOverrideModalOpen(false)
+              }}
+              className="app-modal-input"
+              placeholder="VALUE"
+            />
+            <div className="app-modal-actions">
+              <button type="button" className="app-modal-btn" onClick={() => setEnvOverrideModalOpen(false)}>Cancel</button>
+              <button type="button" className="app-modal-btn primary" onClick={submitEnvModal}>{envModalMode === 'create' ? 'Create' : 'Update'}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <footer 
         className="shrink-0 h-6 px-3 flex items-center justify-between text-[10px]"

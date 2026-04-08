@@ -87,6 +87,7 @@ async fn main() {
             .or(api::read_file_route())
             .or(api::create_file_route())
             .or(api::update_file_route())
+            .or(api::env_default_vars_route())
             .or(api::env_default_route()),
     );
 

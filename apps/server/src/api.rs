@@ -213,6 +213,11 @@ struct EnvDefaultResponse {
     count: usize,
 }
 
+#[derive(serde::Serialize)]
+struct EnvDefaultVarsResponse {
+    keys: Vec<String>,
+}
+
 fn merged_env(request_env: Option<HashMap<String, String>>) -> Option<HashMap<String, String>> {
     let defaults = DEFAULT_ENV.get().cloned().unwrap_or_default();
     if defaults.is_empty() {
@@ -431,5 +436,16 @@ pub fn env_default_route() -> impl Filter<Extract = impl Reply, Error = Rejectio
             count,
         })
         .into_response()
+    })
+}
+
+pub fn env_default_vars_route() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::get().and(warp::path("env-default-vars")).map(|| {
+        let mut keys: Vec<String> = DEFAULT_ENV
+            .get()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        keys.sort();
+        ok_json(&EnvDefaultVarsResponse { keys }).into_response()
     })
 }
