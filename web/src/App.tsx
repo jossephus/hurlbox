@@ -51,6 +51,13 @@ interface BuildAssertionsResponse {
   assertions_added: number
 }
 
+interface EditorTab {
+  path: string
+  name: string
+  content: string
+  isDirty: boolean
+}
+
 type RunMode = 'entry' | 'file' | 'test'
 
 const SAMPLE_HURL = `GET https://jsonplaceholder.typicode.com/todos/
@@ -116,6 +123,8 @@ function App() {
   const [rootPath, setRootPath] = useState('.')
   const [selectedRelativePath, setSelectedRelativePath] = useState<string | null>(null)
   const [currentFileName, setCurrentFileName] = useState('editor.hurl')
+  const [editorTabs, setEditorTabs] = useState<EditorTab[]>([])
+  const [activeEditorTabPath, setActiveEditorTabPath] = useState<string | null>(null)
   const [showExplorer, setShowExplorer] = useState(true)
   const [fileTreeRefreshKey, setFileTreeRefreshKey] = useState(0)
   const [envInput, setEnvInput] = useState('')
@@ -156,8 +165,24 @@ function App() {
   }, [])
 
   const handleFileSelect = useCallback((relativePath: string, fileContent: string, options?: { skipHistory?: boolean }) => {
+    const name = relativePath.split('/').pop() || relativePath
+    setEditorTabs((prev) => {
+      const existingIndex = prev.findIndex((tab) => tab.path === relativePath)
+      if (existingIndex >= 0) {
+        return prev.map((tab, index) => {
+          if (index !== existingIndex) return tab
+          return {
+            ...tab,
+            content: tab.isDirty ? tab.content : fileContent,
+          }
+        })
+      }
+      return [...prev, { path: relativePath, name, content: fileContent, isDirty: false }]
+    })
+
+    setActiveEditorTabPath(relativePath)
     setSelectedRelativePath(relativePath)
-    setCurrentFileName(relativePath.split('/').pop() || relativePath)
+    setCurrentFileName(name)
     setContent(fileContent)
     if (!options?.skipHistory) {
       const url = new URL(window.location.href)
@@ -165,6 +190,51 @@ function App() {
       window.history.pushState({ path: relativePath }, '', url.toString())
     }
   }, [])
+
+  const activateEditorTab = useCallback((path: string) => {
+    setEditorTabs((prev) => {
+      const tab = prev.find((t) => t.path === path)
+      if (tab) {
+        setActiveEditorTabPath(path)
+        setSelectedRelativePath(path)
+        setCurrentFileName(tab.name)
+        setContent(tab.content)
+      }
+      return prev
+    })
+
+    const url = new URL(window.location.href)
+    url.searchParams.set('path', path)
+    window.history.pushState({ path }, '', url.toString())
+  }, [])
+
+  const closeEditorTab = useCallback((path: string) => {
+    setEditorTabs((prev) => {
+      const closeIndex = prev.findIndex((tab) => tab.path === path)
+      if (closeIndex < 0) return prev
+
+      const nextTabs = prev.filter((tab) => tab.path !== path)
+
+      if (activeEditorTabPath === path) {
+        const nextActive = nextTabs[closeIndex] || nextTabs[closeIndex - 1] || null
+        setActiveEditorTabPath(nextActive?.path ?? null)
+        setSelectedRelativePath(nextActive?.path ?? null)
+        setCurrentFileName(nextActive?.name ?? 'editor.hurl')
+        setContent(nextActive?.content ?? SAMPLE_HURL)
+
+        const url = new URL(window.location.href)
+        if (nextActive) {
+          url.searchParams.set('path', nextActive.path)
+          window.history.pushState({ path: nextActive.path }, '', url.toString())
+        } else {
+          url.searchParams.delete('path')
+          window.history.pushState({}, '', url.toString())
+        }
+      }
+
+      return nextTabs
+    })
+  }, [activeEditorTabPath])
 
   useEffect(() => {
     const loadFileFromUrl = async (relativePath: string) => {
@@ -400,11 +470,16 @@ function App() {
       }
 
       setContent(payload.content)
+      if (activeEditorTabPath) {
+        setEditorTabs((prev) => prev.map((tab) => tab.path === activeEditorTabPath
+          ? { ...tab, content: payload.content, isDirty: true }
+          : tab))
+      }
       window.alert(`Added ${payload.assertions_added} generated assertion(s) to entry ${lastRunEntryIndex + 1}`)
     } catch {
       window.alert('Failed to build assertions')
     }
-  }, [content, envInput, lastRunEntryIndex, lastRunResult])
+  }, [activeEditorTabPath, content, envInput, lastRunEntryIndex, lastRunResult])
 
   const handleSaveFile = useCallback(async () => {
     if (!selectedRelativePath) {
@@ -422,11 +497,24 @@ function App() {
         window.alert(data.error || 'Failed to save file')
         return
       }
-      setContent(data.content || content)
+      const savedContent = data.content || content
+      setContent(savedContent)
+      setEditorTabs((prev) => prev.map((tab) => tab.path === selectedRelativePath
+        ? { ...tab, content: savedContent, isDirty: false }
+        : tab))
     } catch {
       window.alert('Failed to save file')
     }
   }, [content, selectedRelativePath])
+
+  const handleEditorChange = useCallback((nextValue: string) => {
+    setContent(nextValue)
+    if (!activeEditorTabPath) return
+    setEditorTabs((prev) => prev.map((tab) => {
+      if (tab.path !== activeEditorTabPath) return tab
+      return { ...tab, content: nextValue, isDirty: true }
+    }))
+  }, [activeEditorTabPath])
 
   return (
     <div 
@@ -612,23 +700,57 @@ function App() {
         {/* Editor Area */}
         <div className="flex-1 flex flex-col min-w-0">
           <div 
-            className="h-8 px-3 flex items-center justify-between shrink-0"
+            className="h-8 px-3 flex items-center justify-between gap-2 shrink-0"
             style={{ 
               background: 'var(--bg-primary)',
               borderBottom: '1px solid var(--border-dim)',
             }}
           >
-            <div className="flex items-center min-w-0">
-              <FileText className="w-3.5 h-3.5 mr-2 shrink-0" style={{ color: 'var(--text-muted)' }} />
-              <span 
-                className="text-xs truncate"
-                style={{ 
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--text-secondary)',
-                }}
-              >
-                {currentFileName}
-              </span>
+            <div className="flex items-center min-w-0 flex-1 overflow-x-auto gap-1">
+              {editorTabs.length === 0 ? (
+                <div className="flex items-center min-w-0">
+                  <FileText className="w-3.5 h-3.5 mr-2 shrink-0" style={{ color: 'var(--text-muted)' }} />
+                  <span
+                    className="text-xs truncate"
+                    style={{
+                      fontFamily: 'var(--font-mono)',
+                      color: 'var(--text-secondary)',
+                    }}
+                  >
+                    {currentFileName}
+                  </span>
+                </div>
+              ) : editorTabs.map((tab) => (
+                <div
+                  key={tab.path}
+                  className="px-2 py-1 text-xs rounded flex items-center gap-1.5 shrink-0"
+                  style={{
+                    color: activeEditorTabPath === tab.path ? 'var(--text-primary)' : 'var(--text-secondary)',
+                    background: activeEditorTabPath === tab.path ? 'var(--bg-elevated)' : 'transparent',
+                    border: `1px solid ${activeEditorTabPath === tab.path ? 'var(--border-default)' : 'transparent'}`,
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => activateEditorTab(tab.path)}
+                    className="flex items-center gap-1.5 min-w-0"
+                    style={{ fontFamily: 'var(--font-mono)' }}
+                  >
+                    <FileCode className="w-3 h-3" />
+                    <span className="max-w-44 truncate">{tab.name}{tab.isDirty ? ' *' : ''}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="text-[10px] leading-none"
+                    onClick={() => closeEditorTab(tab.path)}
+                    style={{ color: 'var(--text-muted)' }}
+                    aria-label={`Close ${tab.name}`}
+                    title={`Close ${tab.name}`}
+                  >
+                    x
+                  </button>
+                </div>
+              ))}
             </div>
             <button
               type="button"
@@ -652,7 +774,7 @@ function App() {
               defaultLanguage="hurl"
               theme={theme === 'dark' ? 'vs-dark' : 'vs'}
               value={content}
-              onChange={(v) => setContent(v || '')}
+              onChange={(v) => handleEditorChange(v || '')}
               onMount={handleEditorMount}
               options={{
                 minimap: { enabled: false },

@@ -12,6 +12,7 @@ cargo-dist-version = "0.31.0"
 install-updater = false
 ci = "github"
 installers = ["shell"]
+install-path = ["$XDG_BIN_HOME", "~/.local/bin"]
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
 apps = ["hurlbox"]
 auto-includes = false
